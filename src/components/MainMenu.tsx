@@ -10,8 +10,8 @@ interface MainMenuProps {
   onOpenSettings?: () => void;
 }
 
-const SPLASHES = [
-  // --- Редкий явный матершинный текст и жесткие рофлы ---
+// --- Редкий явный матершинный пул (Шанс выпадения всего ~3.5%) ---
+const RARE_EXPLICIT_SPLASHES = [
   'Сука, опять крипер дом взорвал!',
   'Блять, я упал в лаву со всеми алмазами!',
   'Ебать ты копатель онлайн!',
@@ -32,8 +32,11 @@ const SPLASHES = [
   'Сука, где мой сундук?!',
   'Какого хуя тут делает крипер в шахте?!',
   'Пиздец котенку... то есть овечке!',
+];
 
-  // --- Рофляные с приглушенным матом ---
+// --- Основной пул: каноничные, атмосферные и рофляные цитаты (96.5% шанс) ---
+const STANDARD_SPLASHES = [
+  // Рофлы и приглушенный юмор
   'Сын Шлю.... ой.. Красавчика!',
   'Еб... твою ж медь, сколько тут угля!',
   'Бл...яха-муха, опять крипер за спиной!',
@@ -55,7 +58,7 @@ const SPLASHES = [
   'Не выё...живайся и строй коробку!',
   'Слышь, ты чё такой дерзкий, зомби?!',
   
-  // --- Геймерские рофлы и мемы ---
+  // Геймерские мемы
   'Копатель онлайн 2026!',
   'А ты нажал F3?',
   'Я случайно съел гнилую плоть...',
@@ -93,7 +96,7 @@ const SPLASHES = [
   'Где мой дом? Я потерялся!',
   'Построй коробку из грязи!',
 
-  // --- Каноничные и обычные игровые тексты ---
+  // Каноничные тексты Minecraft
   'Also Try Original Minecraft!',
   'Also try Terraria!',
   'ProjectCraft 1.0 Alpha!',
@@ -149,6 +152,17 @@ const SPLASHES = [
   'Кликни по этому тексту для новой фразы!',
 ];
 
+const getRandomSplash = (prev?: string): string => {
+  // Редкий шанс ~3.5% для жесткого мата, 96.5% для обычных и рофляных цитат
+  const isRareExplicit = Math.random() < 0.035;
+  const pool = isRareExplicit ? RARE_EXPLICIT_SPLASHES : STANDARD_SPLASHES;
+  let chosen = pool[Math.floor(Math.random() * pool.length)];
+  if (chosen === prev && pool.length > 1) {
+    chosen = pool[(pool.indexOf(chosen) + 1) % pool.length];
+  }
+  return chosen;
+};
+
 export const MainMenu: React.FC<MainMenuProps> = ({
   onStartGame,
   isMobileMode,
@@ -157,16 +171,12 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onRegenerateWorld,
   onOpenSettings,
 }) => {
-  const [splash, setSplash] = useState(() => SPLASHES[Math.floor(Math.random() * SPLASHES.length)]);
+  const [splash, setSplash] = useState(() => getRandomSplash());
   const [showSeedModal, setShowSeedModal] = useState(false);
   const [inputSeed, setInputSeed] = useState(seed.toString());
 
   const rollNextSplash = () => {
-    let next = SPLASHES[Math.floor(Math.random() * SPLASHES.length)];
-    if (next === splash) {
-      next = SPLASHES[(SPLASHES.indexOf(splash) + 1) % SPLASHES.length];
-    }
-    setSplash(next);
+    setSplash((prev) => getRandomSplash(prev));
   };
 
   const handleApplySeed = () => {
