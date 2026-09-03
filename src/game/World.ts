@@ -1,0 +1,301 @@
+import * as THREE from 'three';
+import { BLOCK_TYPE, type BlockType, WORLD_CONFIG } from './constants';
+import { SimplexNoise } from './noise';
+import { createBlockMaterials, type BlockMaterials } from './textures';
+import { Chunk } from './Chunk';
+
+export class World {
+  public chunks = new Map<string, Chunk>();
+  public group: THREE.Group;
+  public materials: BlockMaterials;
+  private noise: SimplexNoise;
+
+  private lastPlayerChunkX = -9999;
+  private lastPlayerChunkZ = -9999;
+
+  constructor(seed = WORLD_CONFIG.SEED) {
+    this.group = new THREE.Group();
+    this.materials = createBlockMaterials();
+    this.noise = new SimplexNoise(seed);
+
+    // Initial load around center (0, 0)
+    this.updatePlayerPosition(0, 0, true);
+  }
+
+  public resetSeed(newSeed: number): void {
+    for (const chunk of this.chunks.values()) {
+      this.group.remove(chunk.group);
+      chunk.dispose();
+    }
+    this.chunks.clear();
+    this.noise = new SimplexNoise(newSeed);
+    this.lastPlayerChunkX = -9999;
+    this.lastPlayerChunkZ = -9999;
+    this.updatePlayerPosition(0, 0, true);
+  }
+
+  private getChunkKey(cx: number, cz: number): string {
+    return `${cx},${cz}`;
+  }
+
+  public getChunk(cx: number, cz: number): Chunk | undefined {
+    return this.chunks.get(this.getChunkKey(cx, cz));
+  }
+
+  public getOrCreateChunk(cx: number, cz: number): Chunk {
+    const key = this.getChunkKey(cx, cz);
+    let chunk = this.chunks.get(key);
+    if (!chunk) {
+      chunk = new Chunk(cx, cz);
+      chunk.generate(this.noise);
+      this.chunks.set(key, chunk);
+      this.group.add(chunk.group);
+    }
+    return chunk;
+  }
+
+  /**
+   * Update chunks dynamically based on player position
+   */
+  public updatePlayerPosition(playerX: number, playerZ: number, force = false): void {
+    const pcx = Math.floor(playerX / WORLD_CONFIG.CHUNK_SIZE_X);
+    const pcz = Math.floor(playerZ / WORLD_CONFIG.CHUNK_SIZE_Z);
+
+    if (!force && pcx === this.lastPlayerChunkX && pcz === this.lastPlayerChunkZ) {
+      return;
+    }
+
+    this.lastPlayerChunkX = pcx;
+    this.lastPlayerChunkZ = pcz;
+
+    const radius = WORLD_CONFIG.VIEW_DISTANCE_CHUNKS;
+    const unloadDist = WORLD_CONFIG.UNLOAD_DISTANCE_CHUNKS;
+
+    const chunksToMesh: Chunk[] = [];
+
+    // 1. Generate new chunks within view radius
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        const cx = pcx + dx;
+        const cz = pcz + dz;
+        const key = this.getChunkKey(cx, cz);
+
+        let chunk = this.chunks.get(key);
+        if (!chunk) {
+          chunk = new Chunk(cx, cz);
+          chunk.generate(this.noise);
+          this.chunks.set(key, chunk);
+          this.group.add(chunk.group);
+          chunksToMesh.push(chunk);
+        } else if (chunk.isDirty) {
+          chunksToMesh.push(chunk);
+        }
+      }
+    }
+
+    // 2. Build meshes for new/dirty chunks
+    for (const chunk of chunksToMesh) {
+      chunk.buildMeshes(this.materials, this);
+    }
+
+    // 3. Unload distant chunks outside unload radius
+    const chunksToRemove: string[] = [];
+    this.chunks.forEach((chunk, key) => {
+      const dist = Math.max(Math.abs(chunk.cx - pcx), Math.abs(chunk.cz - pcz));
+      if (dist > unloadDist) {
+        chunk.dispose();
+        this.group.remove(chunk.group);
+        chunksToRemove.push(key);
+      }
+    });
+
+    for (const key of chunksToRemove) {
+      this.chunks.delete(key);
+    }
+  }
+
+  public getBlock(x: number, y: number, z: number): BlockType {
+    if (y < 0 || y >= WORLD_CONFIG.CHUNK_HEIGHT) {
+      return BLOCK_TYPE.AIR;
+    }
+
+    const cx = Math.floor(x / WORLD_CONFIG.CHUNK_SIZE_X);
+    const cz = Math.floor(z / WORLD_CONFIG.CHUNK_SIZE_Z);
+
+    const chunk = this.getChunk(cx, cz);
+    if (!chunk) {
+      return BLOCK_TYPE.AIR;
+    }
+
+    const lx = x - cx * WORLD_CONFIG.CHUNK_SIZE_X;
+    const lz = z - cz * WORLD_CONFIG.CHUNK_SIZE_Z;
+
+    return chunk.getLocalBlock(lx, y, lz);
+  }
+
+  public setBlock(x: number, y: number, z: number, type: BlockType): boolean {
+    if (y < 0 || y >= WORLD_CONFIG.CHUNK_HEIGHT) {
+      return false;
+    }
+
+    const cx = Math.floor(x / WORLD_CONFIG.CHUNK_SIZE_X);
+    const cz = Math.floor(z / WORLD_CONFIG.CHUNK_SIZE_Z);
+
+    const chunk = this.getOrCreateChunk(cx, cz);
+    const lx = x - cx * WORLD_CONFIG.CHUNK_SIZE_X;
+    const lz = z - cz * WORLD_CONFIG.CHUNK_SIZE_Z;
+
+    const changed = chunk.setLocalBlock(lx, y, lz, type);
+    if (!changed) return false;
+
+    chunk.buildMeshes(this.materials, this);
+
+    // Rebuild neighbor chunks if block is on the edge
+    if (lx === 0) this.getChunk(cx - 1, cz)?.buildMeshes(this.materials, this);
+    if (lx === WORLD_CONFIG.CHUNK_SIZE_X - 1) this.getChunk(cx + 1, cz)?.buildMeshes(this.materials, this);
+    if (lz === 0) this.getChunk(cx, cz - 1)?.buildMeshes(this.materials, this);
+    if (lz === WORLD_CONFIG.CHUNK_SIZE_Z - 1) this.getChunk(cx, cz + 1)?.buildMeshes(this.materials, this);
+
+    return true;
+  }
+
+  public isSolid(x: number, y: number, z: number): boolean {
+    const block = this.getBlock(x, y, z);
+    return block !== BLOCK_TYPE.AIR && block !== BLOCK_TYPE.WATER;
+  }
+
+  public isWater(x: number, y: number, z: number): boolean {
+    return this.getBlock(x, y, z) === BLOCK_TYPE.WATER;
+  }
+
+  public getSpawnPoint(): THREE.Vector3 {
+    // Spiral search around (0, 0) to find a safe, open grass surface away from canyons
+    for (let r = 0; r <= 48; r += 4) {
+      for (let dx = -r; dx <= r; dx += 4) {
+        for (let dz = -r; dz <= r; dz += 4) {
+          if (Math.abs(dx) !== r && Math.abs(dz) !== r && r > 0) continue;
+
+          const cx = Math.floor(dx / WORLD_CONFIG.CHUNK_SIZE_X);
+          const cz = Math.floor(dz / WORLD_CONFIG.CHUNK_SIZE_Z);
+          const chunk = this.getOrCreateChunk(cx, cz);
+          if (chunk.primaryBiome === 'canyon') continue;
+
+          for (let y = WORLD_CONFIG.CHUNK_HEIGHT - 4; y >= 6; y--) {
+            const block = this.getBlock(dx, y, dz);
+            if (block === BLOCK_TYPE.GRASS) {
+              const above1 = this.getBlock(dx, y + 1, dz);
+              const above2 = this.getBlock(dx, y + 2, dz);
+              if (above1 === BLOCK_TYPE.AIR && above2 === BLOCK_TYPE.AIR) {
+                return new THREE.Vector3(dx + 0.5, y + 1.2, dz + 0.5);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return new THREE.Vector3(0.5, 22, 0.5);
+  }
+
+  public getBiomeAt(x: number, z: number): string {
+    const cx = Math.floor(x / WORLD_CONFIG.CHUNK_SIZE_X);
+    const cz = Math.floor(z / WORLD_CONFIG.CHUNK_SIZE_Z);
+    const chunk = this.getChunk(cx, cz);
+    if (!chunk) return 'Равнины (Plains)';
+
+    switch (chunk.primaryBiome) {
+      case 'dense_forest':
+        return 'Густой лес (Dense Forest)';
+      case 'canyon':
+        return 'Каньон / Разлом (Canyon)';
+      case 'forest':
+        return 'Смешанный лес (Forest)';
+      default:
+        return 'Равнины (Plains)';
+    }
+  }
+
+  /**
+   * Fast 3D DDA raycasting across loaded chunks
+   */
+  public raycast(
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    maxDistance = 6.0
+  ): {
+    hit: boolean;
+    blockPos?: THREE.Vector3;
+    placePos?: THREE.Vector3;
+    blockType?: BlockType;
+  } {
+    let x = Math.floor(origin.x);
+    let y = Math.floor(origin.y);
+    let z = Math.floor(origin.z);
+
+    const stepX = Math.sign(direction.x);
+    const stepY = Math.sign(direction.y);
+    const stepZ = Math.sign(direction.z);
+
+    const deltaX = stepX !== 0 ? Math.abs(1 / direction.x) : Infinity;
+    const deltaY = stepY !== 0 ? Math.abs(1 / direction.y) : Infinity;
+    const deltaZ = stepZ !== 0 ? Math.abs(1 / direction.z) : Infinity;
+
+    let maxX = stepX > 0 ? (x + 1 - origin.x) * deltaX : (origin.x - x) * deltaX;
+    let maxY = stepY > 0 ? (y + 1 - origin.y) * deltaY : (origin.y - y) * deltaY;
+    let maxZ = stepZ > 0 ? (z + 1 - origin.z) * deltaZ : (origin.z - z) * deltaZ;
+
+    let normalX = 0;
+    let normalY = 0;
+    let normalZ = 0;
+
+    let dist = 0;
+
+    while (dist <= maxDistance) {
+      const currentBlock = this.getBlock(x, y, z);
+      if (currentBlock !== BLOCK_TYPE.AIR) {
+        return {
+          hit: true,
+          blockPos: new THREE.Vector3(x, y, z),
+          placePos: new THREE.Vector3(x + normalX, y + normalY, z + normalZ),
+          blockType: currentBlock,
+        };
+      }
+
+      if (maxX < maxY) {
+        if (maxX < maxZ) {
+          dist = maxX;
+          x += stepX;
+          maxX += deltaX;
+          normalX = -stepX;
+          normalY = 0;
+          normalZ = 0;
+        } else {
+          dist = maxZ;
+          z += stepZ;
+          maxZ += deltaZ;
+          normalX = 0;
+          normalY = 0;
+          normalZ = -stepZ;
+        }
+      } else {
+        if (maxY < maxZ) {
+          dist = maxY;
+          y += stepY;
+          maxY += deltaY;
+          normalX = 0;
+          normalY = -stepY;
+          normalZ = 0;
+        } else {
+          dist = maxZ;
+          z += stepZ;
+          maxZ += deltaZ;
+          normalX = 0;
+          normalY = 0;
+          normalZ = -stepZ;
+        }
+      }
+    }
+
+    return { hit: false };
+  }
+}
