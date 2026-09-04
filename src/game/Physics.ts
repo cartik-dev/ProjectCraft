@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PHYSICS_CONFIG } from './constants';
+import { BLOCK_TYPE, PHYSICS_CONFIG } from './constants';
 import type { World } from './World';
 
 export class PlayerPhysics {
@@ -15,6 +15,7 @@ export class PlayerPhysics {
   private readonly radius = PHYSICS_CONFIG.PLAYER_RADIUS;
   private readonly height = PHYSICS_CONFIG.PLAYER_HEIGHT;
   private underwaterOverlay: HTMLDivElement | null = null;
+  private waterFlowTimer = 0;
 
   constructor(world: World, spawnPosition: THREE.Vector3) {
     this.world = world;
@@ -137,7 +138,6 @@ export class PlayerPhysics {
     const moveZ = fwdZ * inputMove.forward + rightZ * inputMove.right;
     const moveLen = Math.hypot(moveX, moveZ);
 
-    // Water detection: check feet and body.
     const inWaterFeet =
       this.world.isWater(Math.floor(this.position.x), Math.floor(this.position.y), Math.floor(this.position.z)) ||
       this.world.isWater(Math.floor(this.position.x), Math.floor(this.position.y - 0.2), Math.floor(this.position.z));
@@ -193,8 +193,14 @@ export class PlayerPhysics {
 
     this.moveAndCollide(delta);
 
-    // The effect is based on the camera/eyes being inside a water volume,
-    // rather than merely having wet feet.
+    // Simple local fluid simulation. It only runs near the player, preferring
+    // downward flow into holes and then horizontal spread across supported blocks.
+    this.waterFlowTimer += delta;
+    if (this.waterFlowTimer >= 0.12) {
+      this.waterFlowTimer = 0;
+      this.updateNearbyWater();
+    }
+
     const eyeY = this.position.y + PHYSICS_CONFIG.PLAYER_EYE_HEIGHT;
     this.isUnderwater = this.world.isWater(
       Math.floor(this.position.x),
@@ -205,6 +211,44 @@ export class PlayerPhysics {
 
     if (this.position.y < -10) {
       this.teleport(this.world.getSpawnPoint());
+    }
+  }
+
+  private updateNearbyWater(): void {
+    const px = Math.floor(this.position.x);
+    const py = Math.floor(this.position.y);
+    const pz = Math.floor(this.position.z);
+    const radius = 4;
+    const minY = Math.max(1, py - 4);
+    const maxY = Math.min(47, py + 4);
+
+    // Water falls down first: this is what fills a hole dug underneath a lake/ocean.
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = px - radius; x <= px + radius; x++) {
+        for (let z = pz - radius; z <= pz + radius; z++) {
+          if (this.world.getBlock(x, y, z) !== BLOCK_TYPE.AIR) continue;
+          if (this.world.getBlock(x, y + 1, z) !== BLOCK_TYPE.WATER) continue;
+          if (this.world.setBlock(x, y, z, BLOCK_TYPE.WATER)) return;
+        }
+      }
+    }
+
+    // Then allow a single supported side-flow step at a time.
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = px - radius; x <= px + radius; x++) {
+        for (let z = pz - radius; z <= pz + radius; z++) {
+          if (this.world.getBlock(x, y, z) !== BLOCK_TYPE.AIR) continue;
+          if (this.world.getBlock(x, y - 1, z) === BLOCK_TYPE.AIR) continue;
+
+          const hasSideWater =
+            this.world.getBlock(x + 1, y, z) === BLOCK_TYPE.WATER ||
+            this.world.getBlock(x - 1, y, z) === BLOCK_TYPE.WATER ||
+            this.world.getBlock(x, y, z + 1) === BLOCK_TYPE.WATER ||
+            this.world.getBlock(x, y, z - 1) === BLOCK_TYPE.WATER;
+
+          if (hasSideWater && this.world.setBlock(x, y, z, BLOCK_TYPE.WATER)) return;
+        }
+      }
     }
   }
 
