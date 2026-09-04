@@ -27,12 +27,12 @@ export function createWaterMaterial(): THREE.ShaderMaterial {
     vertexShader: `
       precision highp float;
       uniform float uTime;
-      attribute mat4 instanceMatrix;
       varying vec3 vWorldPos;
       varying float vSurface;
       varying float vWave;
 
       void main() {
+        // InstancedMesh provides instanceMatrix automatically.
         vec3 local = position;
         float isTop = step(0.49, position.y);
         vec3 instanceWorld = (instanceMatrix * vec4(position, 1.0)).xyz;
@@ -47,8 +47,7 @@ export function createWaterMaterial(): THREE.ShaderMaterial {
         vSurface = isTop;
         vWorldPos = (instanceMatrix * vec4(local, 1.0)).xyz;
 
-        vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(local, 1.0);
-        gl_Position = projectionMatrix * mvPosition;
+        gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(local, 1.0);
       }
     `,
     fragmentShader: `
