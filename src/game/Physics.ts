@@ -9,15 +9,95 @@ export class PlayerPhysics {
   public highestFallY = 0;
   public onFallDamage?: (damage: number) => void;
   public isInWater = false;
+  public isUnderwater = false;
 
   private world: World;
   private readonly radius = PHYSICS_CONFIG.PLAYER_RADIUS;
   private readonly height = PHYSICS_CONFIG.PLAYER_HEIGHT;
+  private underwaterOverlay: HTMLDivElement | null = null;
 
   constructor(world: World, spawnPosition: THREE.Vector3) {
     this.world = world;
     this.position = spawnPosition.clone();
     this.highestFallY = this.position.y;
+    this.createUnderwaterOverlay();
+  }
+
+  private createUnderwaterOverlay(): void {
+    if (typeof document === 'undefined') return;
+
+    const existing = document.getElementById('projectcraft-underwater-overlay') as HTMLDivElement | null;
+    if (existing) {
+      this.underwaterOverlay = existing;
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'projectcraft-underwater-overlay';
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      inset: '0',
+      pointerEvents: 'none',
+      zIndex: '999',
+      opacity: '0',
+      background:
+        'radial-gradient(circle at 50% 42%, rgba(28, 132, 190, 0.16), rgba(5, 55, 110, 0.52) 72%, rgba(2, 24, 56, 0.72))',
+      mixBlendMode: 'multiply',
+      transition: 'opacity 120ms ease-out',
+      overflow: 'hidden',
+    });
+
+    const caustics = document.createElement('div');
+    Object.assign(caustics.style, {
+      position: 'absolute',
+      inset: '-10%',
+      opacity: '0.38',
+      backgroundImage:
+        'radial-gradient(circle at 20% 30%, rgba(130, 220, 255, 0.22) 0 1.5%, transparent 6%), radial-gradient(circle at 70% 65%, rgba(100, 205, 255, 0.18) 0 1.2%, transparent 5%), radial-gradient(circle at 45% 80%, rgba(160, 235, 255, 0.16) 0 1.4%, transparent 5%)',
+      backgroundSize: '180px 150px, 220px 190px, 260px 210px',
+      filter: 'blur(1px)',
+      animation: 'projectcraftUnderwaterCaustics 7s linear infinite',
+    });
+
+    const particles = document.createElement('div');
+    Object.assign(particles.style, {
+      position: 'absolute',
+      inset: '0',
+      opacity: '0.32',
+      backgroundImage:
+        'radial-gradient(circle, rgba(210,245,255,0.55) 0 1px, transparent 2px), radial-gradient(circle, rgba(170,230,255,0.40) 0 1px, transparent 2px)',
+      backgroundSize: '110px 135px, 170px 180px',
+      backgroundPosition: '0 0, 35px 70px',
+      animation: 'projectcraftUnderwaterParticles 10s linear infinite',
+    });
+
+    overlay.appendChild(caustics);
+    overlay.appendChild(particles);
+
+    if (!document.getElementById('projectcraft-underwater-style')) {
+      const style = document.createElement('style');
+      style.id = 'projectcraft-underwater-style';
+      style.textContent = `
+        @keyframes projectcraftUnderwaterCaustics {
+          0% { transform: translate3d(-2%, -1%, 0) scale(1.02); }
+          50% { transform: translate3d(2%, 1%, 0) scale(1.06); }
+          100% { transform: translate3d(-2%, -1%, 0) scale(1.02); }
+        }
+        @keyframes projectcraftUnderwaterParticles {
+          0% { transform: translate3d(0, 8%, 0); }
+          100% { transform: translate3d(2%, -8%, 0); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    document.body.appendChild(overlay);
+    this.underwaterOverlay = overlay;
+  }
+
+  private updateUnderwaterOverlay(): void {
+    if (!this.underwaterOverlay) return;
+    this.underwaterOverlay.style.opacity = this.isUnderwater ? '1' : '0';
   }
 
   public getEyePosition(): THREE.Vector3 {
@@ -33,6 +113,12 @@ export class PlayerPhysics {
     this.velocity.set(0, 0, 0);
     this.highestFallY = pos.y;
     this.isGrounded = false;
+    this.isUnderwater = this.world.isWater(
+      Math.floor(this.position.x),
+      Math.floor(this.position.y + PHYSICS_CONFIG.PLAYER_EYE_HEIGHT),
+      Math.floor(this.position.z)
+    );
+    this.updateUnderwaterOverlay();
   }
 
   public update(
@@ -49,10 +135,9 @@ export class PlayerPhysics {
 
     const moveX = fwdX * inputMove.forward + rightX * inputMove.right;
     const moveZ = fwdZ * inputMove.forward + rightZ * inputMove.right;
-
     const moveLen = Math.hypot(moveX, moveZ);
 
-    // Water detection: check feet and body
+    // Water detection: check feet and body.
     const inWaterFeet =
       this.world.isWater(Math.floor(this.position.x), Math.floor(this.position.y), Math.floor(this.position.z)) ||
       this.world.isWater(Math.floor(this.position.x), Math.floor(this.position.y - 0.2), Math.floor(this.position.z));
@@ -79,40 +164,45 @@ export class PlayerPhysics {
       targetVelZ = (moveZ / moveLen) * speed;
     }
 
-    // Smooth horizontal acceleration
     const accelRate = this.isInWater ? 10.0 : (this.isGrounded ? 18.0 : 6.0);
     this.velocity.x += (targetVelX - this.velocity.x) * Math.min(1.0, accelRate * delta);
     this.velocity.z += (targetVelZ - this.velocity.z) * Math.min(1.0, accelRate * delta);
 
     if (this.isInWater) {
-      this.highestFallY = this.position.y; // Falling into water resets fall damage!
+      this.highestFallY = this.position.y;
       if (isJumping) {
         if (!inWaterBody && inWaterFeet) {
-          this.velocity.y = 7.5; // High leap out of water onto shore!
+          this.velocity.y = 7.5;
         } else {
-          this.velocity.y = 5.2; // Swim up towards surface
+          this.velocity.y = 5.2;
         }
       } else {
-        this.velocity.y = Math.max(-3.5, this.velocity.y - 8.0 * delta); // Slower sink
+        this.velocity.y = Math.max(-3.5, this.velocity.y - 8.0 * delta);
       }
     } else {
-      // Jumping on land
       if (isJumping && this.isGrounded) {
         this.velocity.y = PHYSICS_CONFIG.JUMP_SPEED;
         this.isGrounded = false;
       }
 
-      // Gravity
       this.velocity.y -= PHYSICS_CONFIG.GRAVITY * delta;
       if (this.velocity.y < PHYSICS_CONFIG.TERMINAL_VELOCITY) {
         this.velocity.y = PHYSICS_CONFIG.TERMINAL_VELOCITY;
       }
     }
 
-    // Axis-separated collision resolution
     this.moveAndCollide(delta);
 
-    // Fall rescue - respawn if fallen into the void
+    // The effect is based on the camera/eyes being inside a water volume,
+    // rather than merely having wet feet.
+    const eyeY = this.position.y + PHYSICS_CONFIG.PLAYER_EYE_HEIGHT;
+    this.isUnderwater = this.world.isWater(
+      Math.floor(this.position.x),
+      Math.floor(eyeY),
+      Math.floor(this.position.z)
+    );
+    this.updateUnderwaterOverlay();
+
     if (this.position.y < -10) {
       this.teleport(this.world.getSpawnPoint());
     }
@@ -121,7 +211,6 @@ export class PlayerPhysics {
   private moveAndCollide(dt: number): void {
     const eps = 0.001;
 
-    // Helper: auto-step up 1-block ledge (e.g. climbing out of water or over blocks)
     const canStepUp = (targetBx: number, targetBy: number, targetBz: number): boolean => {
       const footY = Math.floor(this.position.y);
       if (
@@ -134,7 +223,6 @@ export class PlayerPhysics {
       return false;
     };
 
-    // --- 1. Move along X axis ---
     this.position.x += this.velocity.x * dt;
     let minX = this.position.x - this.radius;
     let maxX = this.position.x + this.radius;
@@ -147,7 +235,6 @@ export class PlayerPhysics {
       for (let by = Math.floor(minY); by <= Math.floor(maxY); by++) {
         for (let bz = Math.floor(minZ); bz <= Math.floor(maxZ); bz++) {
           if (this.world.isSolid(bx, by, bz)) {
-            // Auto step-up only when climbing out of water onto shore
             if (this.isInWater && canStepUp(bx, by, bz)) {
               this.position.y = by + 1 + eps;
               this.isGrounded = true;
@@ -166,7 +253,6 @@ export class PlayerPhysics {
       }
     }
 
-    // --- 2. Move along Z axis ---
     this.position.z += this.velocity.z * dt;
     minX = this.position.x - this.radius;
     maxX = this.position.x + this.radius;
@@ -195,53 +281,48 @@ export class PlayerPhysics {
       }
     }
 
-    // --- 3. Move along Y axis ---
     this.position.y += this.velocity.y * dt;
-    minX = this.position.x - this.radius;
-    maxX = this.position.x + this.radius;
-    minY = this.position.y;
-    maxY = this.position.y + this.height;
-    minZ = this.position.z - this.radius;
-    maxZ = this.position.z + this.radius;
-
-    const wasInAir = !this.isGrounded;
     this.isGrounded = false;
 
-    for (let bx = Math.floor(minX); bx <= Math.floor(maxX); bx++) {
-      for (let by = Math.floor(minY); by <= Math.floor(maxY); by++) {
-        for (let bz = Math.floor(minZ); bz <= Math.floor(maxZ); bz++) {
-          if (this.world.isSolid(bx, by, bz)) {
-            if (this.velocity.y < 0) {
-              // Hit floor
-              this.position.y = by + 1;
-              this.velocity.y = 0;
-              this.isGrounded = true;
+    const minX2 = this.position.x - this.radius;
+    const maxX2 = this.position.x + this.radius;
+    const minY2 = this.position.y;
+    const maxY2 = this.position.y + this.height;
+    const minZ2 = this.position.z - this.radius;
+    const maxZ2 = this.position.z + this.radius;
 
-              // Fall Damage Calculation (negated if landing in water)
-              if (wasInAir && !this.isInWater) {
-                const fallDistance = this.highestFallY - this.position.y;
-                if (fallDistance > 3.5 && this.onFallDamage) {
-                  const damage = Math.floor((fallDistance - 3) * 2);
-                  if (damage > 0) {
-                    this.onFallDamage(damage);
-                  }
-                }
-              }
-              this.highestFallY = this.position.y;
-            } else if (this.velocity.y > 0) {
-              // Hit ceiling
+    for (let bx = Math.floor(minX2); bx <= Math.floor(maxX2); bx++) {
+      for (let by = Math.floor(minY2); by <= Math.floor(maxY2); by++) {
+        for (let bz = Math.floor(minZ2); bz <= Math.floor(maxZ2); bz++) {
+          if (this.world.isSolid(bx, by, bz)) {
+            if (this.velocity.y > 0) {
               this.position.y = by - this.height - eps;
-              this.velocity.y = 0;
+            } else {
+              this.position.y = by + 1 + eps;
+              this.isGrounded = true;
             }
-            break;
+            this.velocity.y = 0;
           }
         }
       }
     }
 
-    // Track highest Y during fall
-    if (this.position.y > this.highestFallY || this.isGrounded || this.isInWater) {
+    if (this.isGrounded && this.highestFallY - this.position.y > 3) {
+      const fallDistance = this.highestFallY - this.position.y;
+      const damage = Math.max(0, Math.floor(fallDistance - 3));
+      if (damage > 0 && this.onFallDamage) {
+        this.onFallDamage(damage);
+      }
       this.highestFallY = this.position.y;
+    } else if (!this.isGrounded) {
+      this.highestFallY = Math.max(this.highestFallY, this.position.y);
     }
+  }
+
+  public dispose(): void {
+    if (this.underwaterOverlay?.parentElement) {
+      this.underwaterOverlay.parentElement.removeChild(this.underwaterOverlay);
+    }
+    this.underwaterOverlay = null;
   }
 }
