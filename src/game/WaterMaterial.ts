@@ -1,14 +1,29 @@
 import * as THREE from 'three';
 
+const waterTime = { value: 0 };
+let animationStarted = false;
+
+function startWaterAnimation(): void {
+  if (animationStarted || typeof window === 'undefined') return;
+  animationStarted = true;
+
+  const tick = () => {
+    waterTime.value = performance.now() * 0.001;
+    window.requestAnimationFrame(tick);
+  };
+
+  window.requestAnimationFrame(tick);
+}
+
 /** Animated, lightweight water material for the voxel ocean. */
 export function createWaterMaterial(): THREE.ShaderMaterial {
+  startWaterAnimation();
+
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
-    uniforms: {
-      uTime: { value: 0 },
-    },
+    uniforms: { uTime: waterTime },
     vertexShader: `
       precision highp float;
       uniform float uTime;
