@@ -23,20 +23,18 @@ export function createWaterEffectMaterial(): THREE.ShaderMaterial {
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
-    uniforms: {
-      uTime: waterTime,
-    },
+    uniforms: { uTime: waterTime },
     vertexShader: `
       precision highp float;
       uniform float uTime;
       attribute mat4 instanceMatrix;
+      attribute vec3 normal;
       varying vec3 vWorldPos;
 
       void main() {
         vec4 worldPosition = instanceMatrix * vec4(position, 1.0);
         vWorldPos = worldPosition.xyz;
 
-        // Very subtle movement keeps the water alive without bending block edges too much.
         if (normal.y > 0.5) {
           worldPosition.y +=
             sin(worldPosition.x * 1.8 + uTime * 1.7) * 0.035 +
@@ -55,7 +53,6 @@ export function createWaterEffectMaterial(): THREE.ShaderMaterial {
         float waveA = sin(vWorldPos.x * 2.8 + uTime * 1.6);
         float waveB = cos(vWorldPos.z * 3.2 - uTime * 1.25);
         float waveC = sin((vWorldPos.x + vWorldPos.z) * 1.7 - uTime * 0.9);
-
         float ripple = waveA * 0.35 + waveB * 0.35 + waveC * 0.30;
         float glint = smoothstep(0.62, 0.92, ripple);
 
