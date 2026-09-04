@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { BLOCK_TYPE, type BlockType, WORLD_CONFIG } from './constants';
 import { SimplexNoise } from './noise';
 import { createBlockMaterials, type BlockMaterials } from './textures';
-import { createWaterEffectMaterial } from './WaterEffectMaterial';
 import { Chunk } from './Chunk';
 
 export class World {
@@ -10,8 +9,15 @@ export class World {
   public group: THREE.Group;
   public materials: BlockMaterials;
   private noise: SimplexNoise;
-  private waterMeshes = new Map<string, THREE.InstancedMesh>();
-  private waterGeometry = new THREE.BoxGeometry(1, 1, 1);
+
+  private waterMeshes = new Map<string, THREE.InstancedMesh[]>();
+  private waterGeometries = {
+    top: new THREE.PlaneGeometry(1, 1),
+    plusX: new THREE.PlaneGeometry(1, 1),
+    minusX: new THREE.PlaneGeometry(1, 1),
+    plusZ: new THREE.PlaneGeometry(1, 1),
+    minusZ: new THREE.PlaneGeometry(1, 1),
+  };
   private waterDummy = new THREE.Object3D();
 
   private lastPlayerChunkX = -9999;
@@ -20,15 +26,22 @@ export class World {
   constructor(seed = WORLD_CONFIG.SEED) {
     this.group = new THREE.Group();
     this.materials = createBlockMaterials();
-    this.materials.materialsByBlock[BLOCK_TYPE.WATER] = createWaterEffectMaterial();
     this.noise = new SimplexNoise(seed);
+
+    this.waterGeometries.top.rotateX(-Math.PI / 2);
+    this.waterGeometries.plusX.rotateY(Math.PI / 2);
+    this.waterGeometries.minusX.rotateY(-Math.PI / 2);
+    this.waterGeometries.minusZ.rotateY(Math.PI);
+
     this.updatePlayerPosition(0, 0, true);
   }
 
   public resetSeed(newSeed: number): void {
-    for (const mesh of this.waterMeshes.values()) {
-      this.group.remove(mesh);
-      mesh.dispose();
+    for (const meshes of this.waterMeshes.values()) {
+      for (const mesh of meshes) {
+        this.group.remove(mesh);
+        mesh.dispose();
+      }
     }
     this.waterMeshes.clear();
 
@@ -71,31 +84,58 @@ export class World {
     }
   }
 
-  private packPair(first: boolean, second: boolean): number {
-    return (Number(first) + Number(second) * 2) / 4;
+  private getWaterMaterial(): THREE.Material {
+    const material = this.materials.materialsByBlock[BLOCK_TYPE.WATER];
+    if (Array.isArray(material)) return material[0];
+    material.transparent = true;
+    material.opacity = 0.72;
+    material.depthWrite = false;
+    material.side = THREE.DoubleSide;
+    return material;
+  }
+
+  private createWaterFaceMesh(
+    geometry: THREE.PlaneGeometry,
+    positions: THREE.Vector3[],
+  ): THREE.InstancedMesh | undefined {
+    if (positions.length === 0) return undefined;
+
+    const mesh = new THREE.InstancedMesh(
+      geometry,
+      this.getWaterMaterial(),
+      positions.length,
+    );
+    mesh.renderOrder = 2;
+    mesh.frustumCulled = false;
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+
+    for (let i = 0; i < positions.length; i++) {
+      this.waterDummy.position.copy(positions[i]);
+      this.waterDummy.updateMatrix();
+      mesh.setMatrixAt(i, this.waterDummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    return mesh;
   }
 
   private rebuildWaterMesh(chunk: Chunk): void {
     const key = this.getChunkKey(chunk.cx, chunk.cz);
     const previous = this.waterMeshes.get(key);
     if (previous) {
-      this.group.remove(previous);
-      previous.dispose();
-      this.waterMeshes.delete(key);
+      for (const mesh of previous) {
+        this.group.remove(mesh);
+        mesh.dispose();
+      }
     }
-
+    this.waterMeshes.delete(key);
     this.hideLegacyWaterMesh(chunk);
 
-    const waterPositions: Array<{
-      x: number;
-      y: number;
-      z: number;
-      plusX: boolean;
-      minusX: boolean;
-      plusZ: boolean;
-      minusZ: boolean;
-      top: boolean;
-    }> = [];
+    const top: THREE.Vector3[] = [];
+    const plusX: THREE.Vector3[] = [];
+    const minusX: THREE.Vector3[] = [];
+    const plusZ: THREE.Vector3[] = [];
+    const minusZ: THREE.Vector3[] = [];
 
     for (let lx = 0; lx < WORLD_CONFIG.CHUNK_SIZE_X; lx++) {
       for (let ly = 0; ly < WORLD_CONFIG.CHUNK_HEIGHT; ly++) {
@@ -104,53 +144,48 @@ export class World {
 
           const wx = chunk.worldStartX + lx;
           const wz = chunk.worldStartZ + lz;
-          const plusX = this.getBlock(wx + 1, ly, wz) === BLOCK_TYPE.AIR;
-          const minusX = this.getBlock(wx - 1, ly, wz) === BLOCK_TYPE.AIR;
-          const plusZ = this.getBlock(wx, ly, wz + 1) === BLOCK_TYPE.AIR;
-          const minusZ = this.getBlock(wx, ly, wz - 1) === BLOCK_TYPE.AIR;
-          const top = this.getBlock(wx, ly + 1, wz) === BLOCK_TYPE.AIR;
+          const centerY = ly + 0.5;
 
-          if (!plusX && !minusX && !plusZ && !minusZ && !top) continue;
+          const neighborX1 = this.getBlock(wx + 1, ly, wz);
+          const neighborX0 = this.getBlock(wx - 1, ly, wz);
+          const neighborZ1 = this.getBlock(wx, ly, wz + 1);
+          const neighborZ0 = this.getBlock(wx, ly, wz - 1);
+          const above = this.getBlock(wx, ly + 1, wz);
 
-          waterPositions.push({ x: wx, y: ly, z: wz, plusX, minusX, plusZ, minusZ, top });
+          if (above === BLOCK_TYPE.AIR) {
+            top.push(new THREE.Vector3(wx + 0.5, ly + 1.002, wz + 0.5));
+          }
+          if (neighborX1 === BLOCK_TYPE.AIR) {
+            plusX.push(new THREE.Vector3(wx + 1.002, centerY, wz + 0.5));
+          }
+          if (neighborX0 === BLOCK_TYPE.AIR) {
+            minusX.push(new THREE.Vector3(wx - 0.002, centerY, wz + 0.5));
+          }
+          if (neighborZ1 === BLOCK_TYPE.AIR) {
+            plusZ.push(new THREE.Vector3(wx + 0.5, centerY, wz + 1.002));
+          }
+          if (neighborZ0 === BLOCK_TYPE.AIR) {
+            minusZ.push(new THREE.Vector3(wx + 0.5, centerY, wz - 0.002));
+          }
         }
       }
     }
 
-    if (waterPositions.length === 0) return;
+    const meshes: THREE.InstancedMesh[] = [];
+    const topMesh = this.createWaterFaceMesh(this.waterGeometries.top, top);
+    const plusXMesh = this.createWaterFaceMesh(this.waterGeometries.plusX, plusX);
+    const minusXMesh = this.createWaterFaceMesh(this.waterGeometries.minusX, minusX);
+    const plusZMesh = this.createWaterFaceMesh(this.waterGeometries.plusZ, plusZ);
+    const minusZMesh = this.createWaterFaceMesh(this.waterGeometries.minusZ, minusZ);
 
-    const material = this.materials.materialsByBlock[BLOCK_TYPE.WATER];
-    if (Array.isArray(material)) return;
-
-    const mesh = new THREE.InstancedMesh(this.waterGeometry, material, waterPositions.length);
-    mesh.renderOrder = 2;
-    mesh.receiveShadow = false;
-    mesh.castShadow = false;
-    mesh.frustumCulled = false;
-
-    for (let i = 0; i < waterPositions.length; i++) {
-      const p = waterPositions[i];
-      this.waterDummy.position.set(p.x + 0.5, p.y + 0.5, p.z + 0.5);
-      this.waterDummy.updateMatrix();
-      mesh.setMatrixAt(i, this.waterDummy.matrix);
-      mesh.setColorAt(i, new THREE.Color(
-        this.packPair(p.plusX, p.minusX),
-        this.packPair(p.plusZ, p.minusZ),
-        this.packPair(p.top, false),
-      ));
+    for (const mesh of [topMesh, plusXMesh, minusXMesh, plusZMesh, minusZMesh]) {
+      if (mesh) {
+        meshes.push(mesh);
+        this.group.add(mesh);
+      }
     }
 
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-
-    this.waterMeshes.set(key, mesh);
-    this.group.add(mesh);
-  }
-
-  private rebuildLoadedWaterMeshes(): void {
-    for (const chunk of this.chunks.values()) {
-      this.rebuildWaterMesh(chunk);
-    }
+    if (meshes.length > 0) this.waterMeshes.set(key, meshes);
   }
 
   public updatePlayerPosition(playerX: number, playerZ: number, force = false): void {
@@ -184,16 +219,21 @@ export class World {
       }
     }
 
-    for (const chunk of chunksToMesh) chunk.buildMeshes(this.materials, this);
+    for (const chunk of chunksToMesh) {
+      chunk.buildMeshes(this.materials, this);
+      this.rebuildWaterMesh(chunk);
+    }
 
     const chunksToRemove: string[] = [];
     this.chunks.forEach((chunk, key) => {
       const dist = Math.max(Math.abs(chunk.cx - pcx), Math.abs(chunk.cz - pcz));
       if (dist > unloadDist) {
-        const waterMesh = this.waterMeshes.get(key);
-        if (waterMesh) {
-          this.group.remove(waterMesh);
-          waterMesh.dispose();
+        const meshes = this.waterMeshes.get(key);
+        if (meshes) {
+          for (const mesh of meshes) {
+            this.group.remove(mesh);
+            mesh.dispose();
+          }
           this.waterMeshes.delete(key);
         }
         chunk.dispose();
@@ -203,7 +243,6 @@ export class World {
     });
 
     for (const key of chunksToRemove) this.chunks.delete(key);
-    this.rebuildLoadedWaterMeshes();
   }
 
   public getBlock(x: number, y: number, z: number): BlockType {
@@ -275,28 +314,34 @@ export class World {
   }
 
   public getSpawnPoint(): THREE.Vector3 {
-    for (let r = 0; r <= 48; r += 4) {
+    for (let r = 0; r <= 64; r += 4) {
       for (let dx = -r; dx <= r; dx += 4) {
         for (let dz = -r; dz <= r; dz += 4) {
           if (Math.abs(dx) !== r && Math.abs(dz) !== r && r > 0) continue;
-          const cx = Math.floor(dx / WORLD_CONFIG.CHUNK_SIZE_X);
-          const cz = Math.floor(dz / WORLD_CONFIG.CHUNK_SIZE_Z);
-          const chunk = this.getOrCreateChunk(cx, cz);
-          if (chunk.primaryBiome === 'canyon') continue;
-          for (let y = WORLD_CONFIG.CHUNK_HEIGHT - 4; y >= 6; y--) {
+          this.getOrCreateChunk(
+            Math.floor(dx / WORLD_CONFIG.CHUNK_SIZE_X),
+            Math.floor(dz / WORLD_CONFIG.CHUNK_SIZE_Z),
+          );
+
+          for (let y = WORLD_CONFIG.CHUNK_HEIGHT - 2; y >= 1; y--) {
             const block = this.getBlock(dx, y, dz);
-            if (block === BLOCK_TYPE.GRASS) {
-              const above1 = this.getBlock(dx, y + 1, dz);
-              const above2 = this.getBlock(dx, y + 2, dz);
-              if (above1 === BLOCK_TYPE.AIR && above2 === BLOCK_TYPE.AIR) {
-                return new THREE.Vector3(dx + 0.5, y + 1.2, dz + 0.5);
-              }
+            if (
+              block === BLOCK_TYPE.AIR ||
+              block === BLOCK_TYPE.WATER ||
+              block === BLOCK_TYPE.BEDROCK
+            ) continue;
+
+            const above1 = this.getBlock(dx, y + 1, dz);
+            const above2 = this.getBlock(dx, y + 2, dz);
+            if (above1 === BLOCK_TYPE.AIR && above2 === BLOCK_TYPE.AIR) {
+              return new THREE.Vector3(dx + 0.5, y + 1.2, dz + 0.5);
             }
           }
         }
       }
     }
-    return new THREE.Vector3(0.5, 22, 0.5);
+
+    return new THREE.Vector3(0.5, WORLD_CONFIG.SEA_LEVEL + 2.5, 0.5);
   }
 
   public getBiomeAt(x: number, z: number): string {
@@ -315,7 +360,7 @@ export class World {
   public raycast(
     origin: THREE.Vector3,
     direction: THREE.Vector3,
-    maxDistance = 6.0
+    maxDistance = 6.0,
   ): { hit: boolean; blockPos?: THREE.Vector3; placePos?: THREE.Vector3; blockType?: BlockType } {
     let x = Math.floor(origin.x);
     let y = Math.floor(origin.y);
@@ -347,18 +392,34 @@ export class World {
 
       if (maxX < maxY) {
         if (maxX < maxZ) {
-          dist = maxX; x += stepX; maxX += deltaX;
-          normalX = -stepX; normalY = 0; normalZ = 0;
+          dist = maxX;
+          x += stepX;
+          maxX += deltaX;
+          normalX = -stepX;
+          normalY = 0;
+          normalZ = 0;
         } else {
-          dist = maxZ; z += stepZ; maxZ += deltaZ;
-          normalX = 0; normalY = 0; normalZ = -stepZ;
+          dist = maxZ;
+          z += stepZ;
+          maxZ += deltaZ;
+          normalX = 0;
+          normalY = 0;
+          normalZ = -stepZ;
         }
       } else if (maxY < maxZ) {
-        dist = maxY; y += stepY; maxY += deltaY;
-        normalX = 0; normalY = -stepY; normalZ = 0;
+        dist = maxY;
+        y += stepY;
+        maxY += deltaY;
+        normalX = 0;
+        normalY = -stepY;
+        normalZ = 0;
       } else {
-        dist = maxZ; z += stepZ; maxZ += deltaZ;
-        normalX = 0; normalY = 0; normalZ = -stepZ;
+        dist = maxZ;
+        z += stepZ;
+        maxZ += deltaZ;
+        normalX = 0;
+        normalY = 0;
+        normalZ = -stepZ;
       }
     }
 
