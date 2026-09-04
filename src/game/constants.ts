@@ -54,13 +54,14 @@ export const WORLD_CONFIG = {
   CHUNK_HEIGHT: 48,
   VIEW_DISTANCE_CHUNKS: 3,
   UNLOAD_DISTANCE_CHUNKS: 4,
-  SEA_LEVEL: 12,
-  TERRAIN_BASE_HEIGHT: 14,
-  TERRAIN_AMPLITUDE: 5.5,
+  // Lower continental terrain + higher sea level creates broad ocean basins,
+  // shallow shorelines, and more recognizable islands/archipelagos.
+  SEA_LEVEL: 13,
+  TERRAIN_BASE_HEIGHT: 10,
+  TERRAIN_AMPLITUDE: 8,
   SEED: 12345,
 };
 
-// Mining duration in seconds per block type
 export const BLOCK_HARDNESS: Record<BlockType, number> = {
   [BLOCK_TYPE.AIR]: 0,
   [BLOCK_TYPE.WATER]: 0,
@@ -106,10 +107,9 @@ export const BLOCK_HARDNESS: Record<BlockType, number> = {
   [BLOCK_TYPE.RAW_PORKCHOP]: 0.1,
   [BLOCK_TYPE.COOKED_PORKCHOP]: 0.1,
   [BLOCK_TYPE.BONE]: 0.1,
-  [BLOCK_TYPE.BEDROCK]: 999999999, // Indestructible Bedrock
+  [BLOCK_TYPE.BEDROCK]: 999999999,
 };
 
-// Tool Max Durability
 export const TOOL_DURABILITY: Partial<Record<BlockType, number>> = {
   [BLOCK_TYPE.WOODEN_PICKAXE]: 59,
   [BLOCK_TYPE.WOODEN_AXE]: 59,
@@ -128,7 +128,6 @@ export const TOOL_DURABILITY: Partial<Record<BlockType, number>> = {
   [BLOCK_TYPE.DIAMOND_SWORD]: 1561,
 };
 
-// Particle and theme colors
 export const BLOCK_COLORS: Record<BlockType, number> = {
   [BLOCK_TYPE.AIR]: 0x000000,
   [BLOCK_TYPE.WATER]: 0x2563eb,
