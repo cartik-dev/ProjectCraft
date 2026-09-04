@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Smartphone, Monitor } from 'lucide-react';
+import { GAME_VERSION_LABEL } from '../game/version';
 
 interface DebugHUDProps {
   coords?: { x: number; y: number; z: number };
@@ -57,7 +58,7 @@ export const DebugHUD: React.FC<DebugHUDProps> = ({
           padding: '12px 16px',
         }}
       >
-        {/* Left: Authentic Minecraft 1.0 Alpha Watermark */}
+        {/* Left: ProjectCraft version watermark */}
         <div style={{ pointerEvents: 'auto' }}>
           <div
             style={{
@@ -71,7 +72,7 @@ export const DebugHUD: React.FC<DebugHUDProps> = ({
               padding: '2px 4px',
             }}
           >
-            ProjectCraft 1.0 Alpha
+            ProjectCraft {GAME_VERSION_LABEL}
           </div>
 
           {/* Optional F3 Debug (Hidden by default, toggled with F3) */}
