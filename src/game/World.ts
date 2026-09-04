@@ -20,25 +20,23 @@ export class World {
   constructor(seed = WORLD_CONFIG.SEED) {
     this.group = new THREE.Group();
     this.materials = createBlockMaterials();
-
-    // Water remains in the world as a gameplay volume, but it is rendered as
-    // one continuous animated surface instead of breakable-looking cubes.
     this.materials.materialsByBlock[BLOCK_TYPE.WATER].transparent = true;
     this.materials.materialsByBlock[BLOCK_TYPE.WATER].opacity = 0;
     this.materials.materialsByBlock[BLOCK_TYPE.WATER].depthWrite = false;
-
     this.noise = new SimplexNoise(seed);
-
     this.updatePlayerPosition(0, 0, true);
   }
 
   public resetSeed(newSeed: number): void {
-    this.oceanSurface = undefined;
+    if (this.oceanSurface) {
+      this.group.remove(this.oceanSurface);
+      this.oceanSurface = undefined;
+    }
+
     for (const chunk of this.chunks.values()) {
       this.group.remove(chunk.group);
       chunk.dispose();
     }
-    this.group.remove(this.oceanSurface as THREE.Object3D);
     this.chunks.clear();
     this.noise = new SimplexNoise(newSeed);
     this.lastPlayerChunkX = -9999;
@@ -74,7 +72,6 @@ export class World {
     }
   }
 
-  /** Rebuild only the visible top layer of loaded water into a seamless plane mesh. */
   private rebuildOceanSurface(): void {
     if (this.oceanSurface) {
       this.group.remove(this.oceanSurface);
@@ -90,18 +87,13 @@ export class World {
       for (let lx = 0; lx < WORLD_CONFIG.CHUNK_SIZE_X; lx++) {
         for (let lz = 0; lz < WORLD_CONFIG.CHUNK_SIZE_Z; lz++) {
           if (chunk.getLocalBlock(lx, seaY, lz) !== BLOCK_TYPE.WATER) continue;
-
-          // Only expose the top surface. Side faces remain completely hidden,
-          // so adjacent water cells visually merge into one continuous ocean.
           const above = chunk.getLocalBlock(lx, seaY + 1, lz);
           if (above === BLOCK_TYPE.AIR) {
-            positions.push(
-              new THREE.Vector3(
-                chunk.worldStartX + lx + 0.5,
-                seaY + 0.01,
-                chunk.worldStartZ + lz + 0.5
-              )
-            );
+            positions.push(new THREE.Vector3(
+              chunk.worldStartX + lx + 0.5,
+              seaY + 0.01,
+              chunk.worldStartZ + lz + 0.5
+            ));
           }
         }
       }
@@ -133,9 +125,7 @@ export class World {
     const pcx = Math.floor(playerX / WORLD_CONFIG.CHUNK_SIZE_X);
     const pcz = Math.floor(playerZ / WORLD_CONFIG.CHUNK_SIZE_Z);
 
-    if (!force && pcx === this.lastPlayerChunkX && pcz === this.lastPlayerChunkZ) {
-      return;
-    }
+    if (!force && pcx === this.lastPlayerChunkX && pcz === this.lastPlayerChunkZ) return;
 
     this.lastPlayerChunkX = pcx;
     this.lastPlayerChunkZ = pcz;
@@ -149,7 +139,6 @@ export class World {
         const cx = pcx + dx;
         const cz = pcz + dz;
         const key = this.getChunkKey(cx, cz);
-
         let chunk = this.chunks.get(key);
         if (!chunk) {
           chunk = new Chunk(cx, cz);
@@ -163,9 +152,7 @@ export class World {
       }
     }
 
-    for (const chunk of chunksToMesh) {
-      chunk.buildMeshes(this.materials, this);
-    }
+    for (const chunk of chunksToMesh) chunk.buildMeshes(this.materials, this);
 
     const chunksToRemove: string[] = [];
     this.chunks.forEach((chunk, key) => {
@@ -177,21 +164,16 @@ export class World {
       }
     });
 
-    for (const key of chunksToRemove) {
-      this.chunks.delete(key);
-    }
-
+    for (const key of chunksToRemove) this.chunks.delete(key);
     this.rebuildOceanSurface();
   }
 
   public getBlock(x: number, y: number, z: number): BlockType {
     if (y < 0 || y >= WORLD_CONFIG.CHUNK_HEIGHT) return BLOCK_TYPE.AIR;
-
     const cx = Math.floor(x / WORLD_CONFIG.CHUNK_SIZE_X);
     const cz = Math.floor(z / WORLD_CONFIG.CHUNK_SIZE_Z);
     const chunk = this.getChunk(cx, cz);
     if (!chunk) return BLOCK_TYPE.AIR;
-
     const lx = x - cx * WORLD_CONFIG.CHUNK_SIZE_X;
     const lz = z - cz * WORLD_CONFIG.CHUNK_SIZE_Z;
     return chunk.getLocalBlock(lx, y, lz);
@@ -199,6 +181,7 @@ export class World {
 
   public setBlock(x: number, y: number, z: number, type: BlockType): boolean {
     if (y < 0 || y >= WORLD_CONFIG.CHUNK_HEIGHT) return false;
+    if (type === BLOCK_TYPE.WATER) return false;
 
     const cx = Math.floor(x / WORLD_CONFIG.CHUNK_SIZE_X);
     const cz = Math.floor(z / WORLD_CONFIG.CHUNK_SIZE_Z);
@@ -206,18 +189,14 @@ export class World {
     const lx = x - cx * WORLD_CONFIG.CHUNK_SIZE_X;
     const lz = z - cz * WORLD_CONFIG.CHUNK_SIZE_Z;
 
-    if (type === BLOCK_TYPE.WATER) return false;
-
     const changed = chunk.setLocalBlock(lx, y, lz, type);
     if (!changed) return false;
 
     chunk.buildMeshes(this.materials, this);
-
     if (lx === 0) this.getChunk(cx - 1, cz)?.buildMeshes(this.materials, this);
     if (lx === WORLD_CONFIG.CHUNK_SIZE_X - 1) this.getChunk(cx + 1, cz)?.buildMeshes(this.materials, this);
     if (lz === 0) this.getChunk(cx, cz - 1)?.buildMeshes(this.materials, this);
     if (lz === WORLD_CONFIG.CHUNK_SIZE_Z - 1) this.getChunk(cx, cz + 1)?.buildMeshes(this.materials, this);
-
     this.rebuildOceanSurface();
     return true;
   }
@@ -236,12 +215,10 @@ export class World {
       for (let dx = -r; dx <= r; dx += 4) {
         for (let dz = -r; dz <= r; dz += 4) {
           if (Math.abs(dx) !== r && Math.abs(dz) !== r && r > 0) continue;
-
           const cx = Math.floor(dx / WORLD_CONFIG.CHUNK_SIZE_X);
           const cz = Math.floor(dz / WORLD_CONFIG.CHUNK_SIZE_Z);
           const chunk = this.getOrCreateChunk(cx, cz);
           if (chunk.primaryBiome === 'canyon') continue;
-
           for (let y = WORLD_CONFIG.CHUNK_HEIGHT - 4; y >= 6; y--) {
             const block = this.getBlock(dx, y, dz);
             if (block === BLOCK_TYPE.GRASS) {
@@ -255,7 +232,6 @@ export class World {
         }
       }
     }
-
     return new THREE.Vector3(0.5, 22, 0.5);
   }
 
@@ -264,7 +240,6 @@ export class World {
     const cz = Math.floor(z / WORLD_CONFIG.CHUNK_SIZE_Z);
     const chunk = this.getChunk(cx, cz);
     if (!chunk) return 'Равнины (Plains)';
-
     switch (chunk.primaryBiome) {
       case 'dense_forest': return 'Густой лес (Dense Forest)';
       case 'canyon': return 'Каньон / Разлом (Canyon)';
@@ -277,28 +252,19 @@ export class World {
     origin: THREE.Vector3,
     direction: THREE.Vector3,
     maxDistance = 6.0
-  ): {
-    hit: boolean;
-    blockPos?: THREE.Vector3;
-    placePos?: THREE.Vector3;
-    blockType?: BlockType;
-  } {
+  ): { hit: boolean; blockPos?: THREE.Vector3; placePos?: THREE.Vector3; blockType?: BlockType } {
     let x = Math.floor(origin.x);
     let y = Math.floor(origin.y);
     let z = Math.floor(origin.z);
-
     const stepX = Math.sign(direction.x);
     const stepY = Math.sign(direction.y);
     const stepZ = Math.sign(direction.z);
-
     const deltaX = stepX !== 0 ? Math.abs(1 / direction.x) : Infinity;
     const deltaY = stepY !== 0 ? Math.abs(1 / direction.y) : Infinity;
     const deltaZ = stepZ !== 0 ? Math.abs(1 / direction.z) : Infinity;
-
     let maxX = stepX > 0 ? (x + 1 - origin.x) * deltaX : (origin.x - x) * deltaX;
     let maxY = stepY > 0 ? (y + 1 - origin.y) * deltaY : (origin.y - y) * deltaY;
     let maxZ = stepZ > 0 ? (z + 1 - origin.z) * deltaZ : (origin.z - z) * deltaZ;
-
     let normalX = 0;
     let normalY = 0;
     let normalZ = 0;
@@ -306,8 +272,6 @@ export class World {
 
     while (dist <= maxDistance) {
       const currentBlock = this.getBlock(x, y, z);
-
-      // Water is a fluid volume, not a breakable/selectable block.
       if (currentBlock !== BLOCK_TYPE.AIR && currentBlock !== BLOCK_TYPE.WATER) {
         return {
           hit: true,
@@ -319,34 +283,18 @@ export class World {
 
       if (maxX < maxY) {
         if (maxX < maxZ) {
-          dist = maxX;
-          x += stepX;
-          maxX += deltaX;
-          normalX = -stepX;
-          normalY = 0;
-          normalZ = 0;
+          dist = maxX; x += stepX; maxX += deltaX;
+          normalX = -stepX; normalY = 0; normalZ = 0;
         } else {
-          dist = maxZ;
-          z += stepZ;
-          maxZ += deltaZ;
-          normalX = 0;
-          normalY = 0;
-          normalZ = -stepZ;
+          dist = maxZ; z += stepZ; maxZ += deltaZ;
+          normalX = 0; normalY = 0; normalZ = -stepZ;
         }
       } else if (maxY < maxZ) {
-        dist = maxY;
-        y += stepY;
-        maxY += deltaY;
-        normalX = 0;
-        normalY = -stepY;
-        normalZ = 0;
+        dist = maxY; y += stepY; maxY += deltaY;
+        normalX = 0; normalY = -stepY; normalZ = 0;
       } else {
-        dist = maxZ;
-        z += stepZ;
-        maxZ += deltaZ;
-        normalX = 0;
-        normalY = 0;
-        normalZ = -stepZ;
+        dist = maxZ; z += stepZ; maxZ += deltaZ;
+        normalX = 0; normalY = 0; normalZ = -stepZ;
       }
     }
 
