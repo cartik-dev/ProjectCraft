@@ -10,9 +10,9 @@ export class World {
   public group: THREE.Group;
   public materials: BlockMaterials;
   private noise: SimplexNoise;
-  private waterMeshes = new Map<string, THREE.InstancedMesh[]>();
-  private waterGeometry = new THREE.PlaneGeometry(1, 1);
-  private waterMaterial: THREE.ShaderMaterial;
+  private waterMeshes = new Map<string, THREE.InstancedMesh>();
+  private waterGeometry = new THREE.BoxGeometry(1, 1, 1);
+  private waterDummy = new THREE.Object3D();
 
   private lastPlayerChunkX = -9999;
   private lastPlayerChunkZ = -9999;
@@ -20,18 +20,15 @@ export class World {
   constructor(seed = WORLD_CONFIG.SEED) {
     this.group = new THREE.Group();
     this.materials = createBlockMaterials();
-    this.waterMaterial = createWaterEffectMaterial();
-    this.materials.materialsByBlock[BLOCK_TYPE.WATER] = this.waterMaterial;
+    this.materials.materialsByBlock[BLOCK_TYPE.WATER] = createWaterEffectMaterial();
     this.noise = new SimplexNoise(seed);
     this.updatePlayerPosition(0, 0, true);
   }
 
   public resetSeed(newSeed: number): void {
-    for (const meshes of this.waterMeshes.values()) {
-      for (const mesh of meshes) {
-        this.group.remove(mesh);
-        mesh.dispose();
-      }
+    for (const mesh of this.waterMeshes.values()) {
+      this.group.remove(mesh);
+      mesh.dispose();
     }
     this.waterMeshes.clear();
 
@@ -74,63 +71,31 @@ export class World {
     }
   }
 
-  private removeWaterMeshes(key: string): void {
-    const previous = this.waterMeshes.get(key);
-    if (!previous) return;
-
-    for (const mesh of previous) {
-      this.group.remove(mesh);
-      mesh.dispose();
-    }
-    this.waterMeshes.delete(key);
+  private packPair(first: boolean, second: boolean): number {
+    return (Number(first) + Number(second) * 2) / 4;
   }
 
-  private createWaterFace(
-    positions: THREE.Vector3[],
-    rotationX: number,
-    rotationY: number,
-    offsetY = 0
-  ): THREE.InstancedMesh | undefined {
-    if (positions.length === 0) return undefined;
-
-    const mesh = new THREE.InstancedMesh(
-      this.waterGeometry,
-      this.waterMaterial,
-      positions.length
-    );
-    mesh.renderOrder = 2;
-    mesh.receiveShadow = false;
-    mesh.castShadow = false;
-    mesh.frustumCulled = false;
-    mesh.rotation.set(rotationX, rotationY, 0);
-
-    const dummy = new THREE.Object3D();
-    for (let i = 0; i < positions.length; i++) {
-      dummy.position.copy(positions[i]);
-      dummy.position.y += offsetY;
-      dummy.updateMatrix();
-      mesh.setMatrixAt(i, dummy.matrix);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-    return mesh;
-  }
-
-  /**
-   * Water is rendered as separate exposed faces:
-   * - top only when air is above;
-   * - four side faces only when the neighboring block is air.
-   * Water-to-water boundaries never render, creating a continuous surface.
-   */
   private rebuildWaterMesh(chunk: Chunk): void {
     const key = this.getChunkKey(chunk.cx, chunk.cz);
-    this.removeWaterMeshes(key);
+    const previous = this.waterMeshes.get(key);
+    if (previous) {
+      this.group.remove(previous);
+      previous.dispose();
+      this.waterMeshes.delete(key);
+    }
+
     this.hideLegacyWaterMesh(chunk);
 
-    const top: THREE.Vector3[] = [];
-    const plusX: THREE.Vector3[] = [];
-    const minusX: THREE.Vector3[] = [];
-    const plusZ: THREE.Vector3[] = [];
-    const minusZ: THREE.Vector3[] = [];
+    const waterPositions: Array<{
+      x: number;
+      y: number;
+      z: number;
+      plusX: boolean;
+      minusX: boolean;
+      plusZ: boolean;
+      minusZ: boolean;
+      top: boolean;
+    }> = [];
 
     for (let lx = 0; lx < WORLD_CONFIG.CHUNK_SIZE_X; lx++) {
       for (let ly = 0; ly < WORLD_CONFIG.CHUNK_HEIGHT; ly++) {
@@ -139,43 +104,48 @@ export class World {
 
           const wx = chunk.worldStartX + lx;
           const wz = chunk.worldStartZ + lz;
-          const center = new THREE.Vector3(wx + 0.5, ly + 0.5, wz + 0.5);
+          const plusX = this.getBlock(wx + 1, ly, wz) === BLOCK_TYPE.AIR;
+          const minusX = this.getBlock(wx - 1, ly, wz) === BLOCK_TYPE.AIR;
+          const plusZ = this.getBlock(wx, ly, wz + 1) === BLOCK_TYPE.AIR;
+          const minusZ = this.getBlock(wx, ly, wz - 1) === BLOCK_TYPE.AIR;
+          const top = this.getBlock(wx, ly + 1, wz) === BLOCK_TYPE.AIR;
 
-          if (this.getBlock(wx, ly + 1, wz) === BLOCK_TYPE.AIR) {
-            top.push(center.clone().add(new THREE.Vector3(0, 0.5, 0)));
-          }
-          if (this.getBlock(wx + 1, ly, wz) === BLOCK_TYPE.AIR) {
-            plusX.push(center.clone().add(new THREE.Vector3(0.5, 0, 0)));
-          }
-          if (this.getBlock(wx - 1, ly, wz) === BLOCK_TYPE.AIR) {
-            minusX.push(center.clone().add(new THREE.Vector3(-0.5, 0, 0)));
-          }
-          if (this.getBlock(wx, ly, wz + 1) === BLOCK_TYPE.AIR) {
-            plusZ.push(center.clone().add(new THREE.Vector3(0, 0, 0.5)));
-          }
-          if (this.getBlock(wx, ly, wz - 1) === BLOCK_TYPE.AIR) {
-            minusZ.push(center.clone().add(new THREE.Vector3(0, 0, -0.5)));
-          }
+          if (!plusX && !minusX && !plusZ && !minusZ && !top) continue;
+
+          waterPositions.push({ x: wx, y: ly, z: wz, plusX, minusX, plusZ, minusZ, top });
         }
       }
     }
 
-    const meshes: THREE.InstancedMesh[] = [];
-    const topMesh = this.createWaterFace(top, -Math.PI / 2, 0);
-    const plusXMesh = this.createWaterFace(plusX, 0, Math.PI / 2);
-    const minusXMesh = this.createWaterFace(minusX, 0, -Math.PI / 2);
-    const plusZMesh = this.createWaterFace(plusZ, 0, 0);
-    const minusZMesh = this.createWaterFace(minusZ, 0, Math.PI);
+    if (waterPositions.length === 0) return;
 
-    for (const mesh of [topMesh, plusXMesh, minusXMesh, plusZMesh, minusZMesh]) {
-      if (!mesh) continue;
-      meshes.push(mesh);
-      this.group.add(mesh);
+    const material = this.materials.materialsByBlock[BLOCK_TYPE.WATER];
+    if (Array.isArray(material)) return;
+
+    const mesh = new THREE.InstancedMesh(this.waterGeometry, material, waterPositions.length);
+    mesh.renderOrder = 2;
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    // Instances are spread across the entire chunk, so don't let the base geometry bounds cull them.
+    mesh.frustumCulled = false;
+
+    for (let i = 0; i < waterPositions.length; i++) {
+      const p = waterPositions[i];
+      this.waterDummy.position.set(p.x + 0.5, p.y + 0.5, p.z + 0.5);
+      this.waterDummy.updateMatrix();
+      mesh.setMatrixAt(i, this.waterDummy.matrix);
+      mesh.setColorAt(i, new THREE.Color(
+        this.packPair(p.plusX, p.minusX),
+        this.packPair(p.plusZ, p.minusZ),
+        this.packPair(p.top, false),
+      ));
     }
 
-    if (meshes.length > 0) {
-      this.waterMeshes.set(key, meshes);
-    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+
+    this.waterMeshes.set(key, mesh);
+    this.group.add(mesh);
   }
 
   private rebuildLoadedWaterMeshes(): void {
@@ -221,7 +191,12 @@ export class World {
     this.chunks.forEach((chunk, key) => {
       const dist = Math.max(Math.abs(chunk.cx - pcx), Math.abs(chunk.cz - pcz));
       if (dist > unloadDist) {
-        this.removeWaterMeshes(key);
+        const waterMesh = this.waterMeshes.get(key);
+        if (waterMesh) {
+          this.group.remove(waterMesh);
+          waterMesh.dispose();
+          this.waterMeshes.delete(key);
+        }
         chunk.dispose();
         this.group.remove(chunk.group);
         chunksToRemove.push(key);
@@ -253,7 +228,7 @@ export class World {
     const lx = x - cx * WORLD_CONFIG.CHUNK_SIZE_X;
     const lz = z - cz * WORLD_CONFIG.CHUNK_SIZE_Z;
 
-    const changed = chunk.setLocalBlock(lx, y, lz, type);
+    const changed = chunk.setLocalBlock(lx, ly, lz, type);
     if (!changed) return false;
 
     const affected: Chunk[] = [chunk];
