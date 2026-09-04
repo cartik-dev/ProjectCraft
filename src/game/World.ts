@@ -20,9 +20,16 @@ export class World {
   constructor(seed = WORLD_CONFIG.SEED) {
     this.group = new THREE.Group();
     this.materials = createBlockMaterials();
-    this.materials.materialsByBlock[BLOCK_TYPE.WATER].transparent = true;
-    this.materials.materialsByBlock[BLOCK_TYPE.WATER].opacity = 0;
-    this.materials.materialsByBlock[BLOCK_TYPE.WATER].depthWrite = false;
+
+    // A block material can be a single Material or an array of Materials.
+    // Water uses a single material, but narrow the union before changing it.
+    const waterMaterial = this.materials.materialsByBlock[BLOCK_TYPE.WATER];
+    if (!Array.isArray(waterMaterial)) {
+      waterMaterial.transparent = true;
+      waterMaterial.opacity = 0;
+      waterMaterial.depthWrite = false;
+    }
+
     this.noise = new SimplexNoise(seed);
     this.updatePlayerPosition(0, 0, true);
   }
