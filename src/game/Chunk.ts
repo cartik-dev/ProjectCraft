@@ -75,13 +75,12 @@ export class Chunk {
   }
 
   /**
-   * Generate terrain height, Canyons, 3D Caves, and Dense Forests
+   * Generate broad Minecraft-like land masses, oceans, canyons, caves and forests.
    */
   public generate(noise: SimplexNoise): void {
     const heightMap: number[][] = [];
     const isCanyonColumn: boolean[][] = [];
 
-    // Biome determination for this chunk
     const biomeVal = noise.fbm2D(this.cx * 0.08, this.cz * 0.08, 2);
     if (biomeVal > 0.06) {
       this.primaryBiome = 'dense_forest';
@@ -93,7 +92,6 @@ export class Chunk {
 
     let hasCanyon = false;
 
-    // 1. Initial Heightmap & Canyon Ravine Carving
     for (let lx = 0; lx < WORLD_CONFIG.CHUNK_SIZE_X; lx++) {
       heightMap[lx] = [];
       isCanyonColumn[lx] = [];
@@ -102,12 +100,17 @@ export class Chunk {
         const wx = this.worldStartX + lx;
         const wz = this.worldStartZ + lz;
 
-        // Base gentle rolling terrain
-        const n = noise.fbm2D(wx * 0.012, wz * 0.012, 3, 2.0, 0.45);
-        let surfaceY = Math.floor(WORLD_CONFIG.TERRAIN_BASE_HEIGHT + n * WORLD_CONFIG.TERRAIN_AMPLITUDE);
+        // Very low-frequency continental noise creates wide islands/continents.
+        const continental = noise.fbm2D(wx * 0.0048, wz * 0.0048, 4, 2.0, 0.5);
+        // A smaller detail layer keeps coastlines and terrain from becoming perfectly smooth.
+        const detail = noise.fbm2D(wx * 0.012, wz * 0.012, 3, 2.0, 0.45);
+        const terrainShape = continental * 0.78 + detail * 0.22;
+        let surfaceY = Math.floor(
+          WORLD_CONFIG.TERRAIN_BASE_HEIGHT + terrainShape * WORLD_CONFIG.TERRAIN_AMPLITUDE
+        );
 
         // Mountain Ridges (high elevation peaks)
-        const mountainNoise = noise.fbm2D((wx + 200) * 0.009, (wz + 200) * 0.009, 3, 2.0, 0.5);
+        const mountainNoise = noise.fbm2D((wx + 200) * 0.0065, (wz + 200) * 0.0065, 3, 2.0, 0.5);
         if (mountainNoise > 0.18) {
           const mountainBoost = Math.floor((mountainNoise - 0.18) * 42);
           surfaceY += mountainBoost;
@@ -129,59 +132,48 @@ export class Chunk {
 
         heightMap[lx][lz] = surfaceY;
 
-        // Block Layer assignment: Water, Beach, Snow Peaks, or Plains/Forest
         const seaLevel = WORLD_CONFIG.SEA_LEVEL;
 
         if (surfaceY < seaLevel) {
-          // Underwater bed: Sand
           this.setLocalBlock(lx, surfaceY, lz, BLOCK_TYPE.SAND);
-          // Water fill from bed up to sea level
           for (let y = surfaceY + 1; y <= seaLevel; y++) {
             this.setLocalBlock(lx, y, lz, BLOCK_TYPE.WATER);
           }
-          // Subsurface below water bed
           for (let y = surfaceY - 1; y >= surfaceY - 3; y--) {
             this.setLocalBlock(lx, y, lz, BLOCK_TYPE.SAND);
           }
         } else if (surfaceY <= seaLevel + 1) {
-          // Sandy beach near coastline
           this.setLocalBlock(lx, surfaceY, lz, BLOCK_TYPE.SAND);
           for (let y = surfaceY - 1; y >= surfaceY - 2; y--) {
             this.setLocalBlock(lx, y, lz, BLOCK_TYPE.SAND);
           }
         } else if (surfaceY >= 28) {
-          // Snow-capped mountain peak!
           this.setLocalBlock(lx, surfaceY, lz, BLOCK_TYPE.SNOW);
           this.setLocalBlock(lx, surfaceY - 1, lz, BLOCK_TYPE.SNOW);
           for (let y = surfaceY - 2; y >= surfaceY - 4; y--) {
             this.setLocalBlock(lx, y, lz, BLOCK_TYPE.STONE);
           }
         } else if (surfaceY >= 22) {
-          // Rocky steep mountain slope
           this.setLocalBlock(lx, surfaceY, lz, BLOCK_TYPE.STONE);
           for (let y = surfaceY - 1; y >= surfaceY - 3; y--) {
             this.setLocalBlock(lx, y, lz, BLOCK_TYPE.STONE);
           }
         } else if (inCanyon) {
-          // Stratified Canyon walls & floor
           this.setLocalBlock(lx, surfaceY, lz, BLOCK_TYPE.STONE);
           for (let y = surfaceY - 1; y >= surfaceY - 3; y--) {
             this.setLocalBlock(lx, y, lz, y % 2 === 0 ? BLOCK_TYPE.DIRT : BLOCK_TYPE.STONE);
           }
         } else {
-          // Normal Grass and Dirt
           this.setLocalBlock(lx, surfaceY, lz, BLOCK_TYPE.GRASS);
           for (let y = surfaceY - 1; y >= surfaceY - 3; y--) {
             this.setLocalBlock(lx, y, lz, BLOCK_TYPE.DIRT);
           }
         }
 
-        // Deep Stone & Ore Veins (Coal, Iron, Gold, Diamond) + Bedrock Floor
-        const stoneTop = surfaceY - (surfaceY < seaLevel ? 4 : 4);
+        const stoneTop = surfaceY - 4;
         for (let y = stoneTop; y >= 0; y--) {
           let blockToSet: BlockType = BLOCK_TYPE.STONE;
 
-          // Bedrock Floor (y = 0..2)
           if (y === 0) {
             blockToSet = BLOCK_TYPE.BEDROCK;
           } else if (y === 1 && Math.sin(wx * 12.3 + wz * 45.6) > -0.2) {
@@ -189,26 +181,21 @@ export class Chunk {
           } else if (y === 2 && Math.cos(wx * 32.1 + wz * 65.4) > 0.6) {
             blockToSet = BLOCK_TYPE.BEDROCK;
           } else {
-            // Balanced Ore Distribution:
-            // 1. Diamonds: deepest depths (y <= 7), rare compact clusters
             if (y <= 7) {
               const diamondVal = noise.noise3D((wx + 300) * 0.40, y * 0.40, (wz + 300) * 0.40);
               if (diamondVal > 0.78) blockToSet = BLOCK_TYPE.DIAMOND_ORE;
             }
 
-            // 2. Gold: deep depths (y <= 13), rare clusters
             if (y <= 13 && blockToSet === BLOCK_TYPE.STONE) {
               const goldVal = noise.noise3D((wx + 150) * 0.36, y * 0.36, (wz + 150) * 0.36);
               if (goldVal > 0.74) blockToSet = BLOCK_TYPE.GOLD_ORE;
             }
 
-            // 3. Iron: mid to deep levels (y <= 24), moderate clusters
             if (y <= 24 && blockToSet === BLOCK_TYPE.STONE) {
               const ironVal = noise.noise3D((wx + 88) * 0.32, y * 0.32, (wz + 88) * 0.32);
               if (ironVal > 0.66) blockToSet = BLOCK_TYPE.IRON_ORE;
             }
 
-            // 4. Coal: widely distributed from underground to mountain cliffs (y <= 38)
             if (y <= 38 && blockToSet === BLOCK_TYPE.STONE) {
               const coalVal = noise.noise3D(wx * 0.28, y * 0.28, wz * 0.28);
               if (coalVal > 0.62) blockToSet = BLOCK_TYPE.COAL_ORE;
@@ -224,7 +211,6 @@ export class Chunk {
       this.primaryBiome = 'canyon';
     }
 
-    // 2. Simple 3D Caves (Worm tunnels & caverns beneath the surface)
     for (let lx = 0; lx < WORLD_CONFIG.CHUNK_SIZE_X; lx++) {
       for (let lz = 0; lz < WORLD_CONFIG.CHUNK_SIZE_Z; lz++) {
         const wx = this.worldStartX + lx;
@@ -232,12 +218,10 @@ export class Chunk {
         const maxCaveY = heightMap[lx][lz] - 2;
 
         for (let y = 3; y <= maxCaveY; y++) {
-          // Double 3D Simplex noise creates organic cylindrical tunnel networks
           const cave1 = noise.noise3D(wx * 0.065, y * 0.085, wz * 0.065);
           const cave2 = noise.noise3D((wx + 80) * 0.065, y * 0.085, (wz + 80) * 0.065);
           const caveDistSq = cave1 * cave1 + cave2 * cave2;
 
-          // Carve cave cavity
           if (caveDistSq < 0.038) {
             this.setLocalBlock(lx, y, lz, BLOCK_TYPE.AIR);
           }
@@ -245,16 +229,12 @@ export class Chunk {
       }
     }
 
-    // 3. Tree generation adapted to Biomes (Dense Forests vs Plains)
     let treeCount = 0;
     if (this.primaryBiome === 'dense_forest') {
-      // Dense forest: 4 to 6 trees per chunk!
       treeCount = 4 + Math.floor(this.chunkRandom(5) * 3);
     } else if (this.primaryBiome === 'forest') {
-      // Normal forest: 2 to 3 trees
       treeCount = 2 + (this.chunkRandom(5) > 0.5 ? 1 : 0);
     } else if (this.primaryBiome === 'plains') {
-      // Plains: 0 to 1 tree
       treeCount = this.chunkRandom(5) > 0.65 ? 1 : 0;
     }
 
@@ -262,7 +242,6 @@ export class Chunk {
       const tx = 2 + Math.floor(this.chunkRandom(10 + t * 4) * 12);
       const tz = 2 + Math.floor(this.chunkRandom(11 + t * 4) * 12);
 
-      // Check if spot is valid
       if (isCanyonColumn[tx][tz]) continue;
       const groundY = heightMap[tx][tz];
 
@@ -382,8 +361,6 @@ export class Chunk {
     const n6 = getNeighbor(lx, ly, lz - 1);
 
     if (currentType === BLOCK_TYPE.WATER) {
-      // Water face is only visible if at least one neighbor is AIR!
-      // (Inner water completely surrounded by water or solid is culled for performance)
       return (
         n1 === BLOCK_TYPE.AIR ||
         n2 === BLOCK_TYPE.AIR ||
@@ -394,9 +371,6 @@ export class Chunk {
       );
     }
 
-    // For any solid block (sand, stone, dirt, ores, wood, etc.):
-    // If ANY neighbor is AIR or WATER, this block MUST be rendered!
-    // If it were culled against water, the riverbed/seabed disappeared, creating the X-RAY bug!
     return (
       !isOpaque(n1) ||
       !isOpaque(n2) ||
@@ -446,8 +420,8 @@ export class Chunk {
       instancedMesh.receiveShadow = false;
       instancedMesh.castShadow = false;
 
-      // Transparent water meshes render after opaque meshes
       if (type === BLOCK_TYPE.WATER) {
+        // Kept in the chunk only as a hidden gameplay volume.
         instancedMesh.renderOrder = 1;
       }
 
