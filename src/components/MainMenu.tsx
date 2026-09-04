@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Smartphone, Monitor } from 'lucide-react';
+import { GAME_VERSION_DISPLAY, GAME_VERSION_LABEL } from '../game/version';
 
 interface MainMenuProps {
   onStartGame: () => void;
@@ -99,7 +100,7 @@ const STANDARD_SPLASHES = [
   // Каноничные тексты Minecraft
   'Also Try Original Minecraft!',
   'Also try Terraria!',
-  'ProjectCraft 1.0 Alpha!',
+  `ProjectCraft ${GAME_VERSION_LABEL}!`,
   'ProjectCraft - Build, Survive, Explore!',
   'Не копай прямо под себя!',
   'Херобрин уже наблюдает...',
@@ -242,7 +243,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             marginTop: '2px',
           }}
         >
-          ALPHA v1.0.0
+          {GAME_VERSION_DISPLAY}
         </div>
 
         {/* Yellow Bouncing Splash Text (Click to roll next!) */}
@@ -396,7 +397,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           textShadow: '1px 1px 2px #000',
         }}
       >
-        <span style={{ fontWeight: 'bold', color: '#facc15' }}>ProjectCraft 1.0 Alpha</span>
+        <span style={{ fontWeight: 'bold', color: '#facc15' }}>ProjectCraft {GAME_VERSION_LABEL}</span>
         <span>C418 Volume Alpha OST &bull; 100% Offline</span>
       </div>
 
