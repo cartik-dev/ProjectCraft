@@ -110,7 +110,7 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory: i
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(0);
   const [side, setSide] = useState<'left' | 'right'>('left');
-  const [anchor, setAnchor] = useState({ left: 0, right: 0, top: 0, height: 0 });
+  const [anchor, setAnchor] = useState<{ left: number; right: number; top: number; height: number } | null>(null);
   const [, refresh] = useState(0);
 
   const isMobile = typeof window !== 'undefined' && (window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768);
@@ -124,10 +124,15 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory: i
   useEffect(() => setPage(0), [mode]);
 
   useEffect(() => {
-    if (!isMobile || !open) return;
+    if (!isMobile) return;
+
     const updatePosition = () => {
       const panel = findInventoryPanel();
-      if (!panel) return;
+      if (!panel) {
+        setAnchor(null);
+        return;
+      }
+
       const rect = panel.getBoundingClientRect();
       const bookWidth = Math.min(270, window.innerWidth - 18);
       const gap = 8;
@@ -136,14 +141,20 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory: i
       setSide(canOpenRight || !canOpenLeft ? 'right' : 'left');
       setAnchor({ left: rect.left, right: rect.right, top: rect.top, height: rect.height });
     };
+
     updatePosition();
+
+    const observer = new MutationObserver(updatePosition);
+    observer.observe(document.body, { childList: true, subtree: true });
     window.addEventListener('resize', updatePosition);
     window.addEventListener('scroll', updatePosition, true);
+
     return () => {
+      observer.disconnect();
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
     };
-  }, [isMobile, open, mode]);
+  }, [isMobile, mode]);
 
   const craft = (recipe: Recipe) => {
     if (!inventory || !canCraft(inventory, recipe)) return;
@@ -157,15 +168,15 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory: i
     onRefreshInventory?.();
   };
 
-  if (!isMobile) return null;
+  if (!isMobile || !anchor) return null;
 
   const bookWidth = Math.min(270, window.innerWidth - 18);
   const panelLeft = side === 'right'
     ? Math.min(window.innerWidth - bookWidth - 9, anchor.right + 8)
     : Math.max(9, anchor.left - bookWidth - 8);
   const buttonLeft = side === 'right'
-    ? Math.min(window.innerWidth - 50, anchor.right + 8)
-    : Math.max(8, anchor.right - 50);
+    ? Math.max(8, anchor.right - 50)
+    : Math.min(window.innerWidth - 50, anchor.left + 8);
 
   return (
     <>
@@ -175,20 +186,20 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory: i
         style={{
           position: 'fixed',
           left: `${buttonLeft}px`,
-          top: `${anchor.top + anchor.height / 2 - 27}px`,
+          top: `${Math.max(8, anchor.top + 6)}px`,
           width: '42px',
-          height: '54px',
+          height: '36px',
           background: '#c6c6c6',
           color: '#373737',
           borderTop: '3px solid #fff',
           borderLeft: '3px solid #fff',
           borderRight: '3px solid #555',
           borderBottom: '3px solid #555',
-          boxShadow: '0 5px 12px rgba(0,0,0,.35)',
+          boxShadow: '0 3px 8px rgba(0,0,0,.35)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: '22px',
+          fontSize: '19px',
           pointerEvents: 'auto',
           touchAction: 'manipulation',
           zIndex: 131,
