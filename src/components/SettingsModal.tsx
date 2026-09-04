@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { GAME_VERSION_LABEL } from '../game/version';
 
 export type FogDistanceOption = 'tiny' | 'short' | 'normal' | 'far';
 
@@ -148,7 +149,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div style={{ fontSize: isSmallScreen ? '18px' : '22px', fontWeight: 900, color: '#facc15', textShadow: '2px 2px #000' }}>
               📜 Титры и Авторы
             </div>
-            <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: 4 }}>ProjectCraft 1.0 Alpha</div>
+            <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: 4 }}>ProjectCraft {GAME_VERSION_LABEL}</div>
           </div>
           <div style={{ display: 'grid', gap: 10, fontSize: '13px' }}>
             <div style={{ background: '#27272a', padding: 12, borderLeft: '4px solid #3b82f6' }}><b>Разработка & Концепт</b><br />Cartik<br /><span style={{ color: '#9ca3af' }}>Главный разработчик, механики и геймплей</span></div>
@@ -166,7 +167,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div style={panelStyle}>
           <div style={{ textAlign: 'center', marginBottom: isSmallScreen ? 14 : 22 }}>
             <div style={{ fontSize: isSmallScreen ? '19px' : '22px', fontWeight: 900, color: '#facc15', textShadow: '2px 2px #000' }}>Настройки</div>
-            <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: 4 }}>ProjectCraft 1.0 Alpha</div>
+            <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: 4 }}>ProjectCraft {GAME_VERSION_LABEL}</div>
           </div>
 
           <div style={{ display: 'grid', gap: isSmallScreen ? 8 : 12, marginBottom: 18 }}>
