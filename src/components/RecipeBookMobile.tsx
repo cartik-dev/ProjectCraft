@@ -1,11 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { BLOCK_TYPE, type BlockType } from '../game/constants';
 import { Inventory } from '../game/Inventory';
 
 type ProjectCraftWindow = Window & { __projectcraftInventory?: Inventory };
 
-// Expose the actual game inventory to this UI-only helper without adding a second game control.
 const inventoryPrototype = Inventory.prototype as Inventory & { __projectCraftBookPatched?: boolean };
 if (!inventoryPrototype.__projectCraftBookPatched) {
   const originalGetSelectedBlockType = inventoryPrototype.getSelectedBlockType;
@@ -52,76 +50,65 @@ const RECIPES: Recipe[] = [
   { id: 'furnace', name: 'Печь', output: BLOCK_TYPE.FURNACE, count: 1, table: '3x3', ingredients: [{ type: BLOCK_TYPE.STONE, count: 8 }] },
 ];
 
-const emojiFor = (type: BlockType) => {
-  switch (type) {
-    case BLOCK_TYPE.OAK_PLANKS: return '🟫';
-    case BLOCK_TYPE.BIRCH_PLANKS: return '🟨';
-    case BLOCK_TYPE.CRAFTING_TABLE: return '🪚';
-    case BLOCK_TYPE.STICK: return '🪵';
-    case BLOCK_TYPE.WOODEN_PICKAXE: return '⛏️';
-    case BLOCK_TYPE.STONE_PICKAXE: return '⛏️';
-    case BLOCK_TYPE.IRON_PICKAXE: return '⛏️';
-    case BLOCK_TYPE.GOLDEN_PICKAXE: return '⛏️';
-    case BLOCK_TYPE.DIAMOND_PICKAXE: return '⛏️';
-    case BLOCK_TYPE.WOODEN_AXE: return '🪓';
-    case BLOCK_TYPE.STONE_AXE: return '🪓';
-    case BLOCK_TYPE.IRON_AXE: return '🪓';
-    case BLOCK_TYPE.DIAMOND_AXE: return '🪓';
-    case BLOCK_TYPE.WOODEN_SHOVEL: return '🥄';
-    case BLOCK_TYPE.IRON_SHOVEL: return '🥄';
-    case BLOCK_TYPE.WOODEN_SWORD: return '⚔️';
-    case BLOCK_TYPE.IRON_SWORD: return '⚔️';
-    case BLOCK_TYPE.GOLDEN_SWORD: return '⚔️';
-    case BLOCK_TYPE.DIAMOND_SWORD: return '⚔️';
-    case BLOCK_TYPE.FURNACE: return '🔥';
-    default: return '⬜';
-  }
+const ingredientName = (type: BlockType | 'ANY_PLANK') => {
+  const names: Partial<Record<BlockType, string>> = {
+    [BLOCK_TYPE.OAK_LOG]: 'Бревно дуба',
+    [BLOCK_TYPE.BIRCH_LOG]: 'Бревно берёзы',
+    [BLOCK_TYPE.OAK_PLANKS]: 'Дубовые доски',
+    [BLOCK_TYPE.BIRCH_PLANKS]: 'Берёзовые доски',
+    [BLOCK_TYPE.STONE]: 'Камень',
+    [BLOCK_TYPE.STICK]: 'Палка',
+    [BLOCK_TYPE.IRON_INGOT]: 'Железо',
+    [BLOCK_TYPE.GOLD_INGOT]: 'Золото',
+    [BLOCK_TYPE.DIAMOND]: 'Алмаз',
+  };
+  return type === 'ANY_PLANK' ? 'Доски' : names[type] ?? 'Предмет';
 };
 
-const countType = (inventory: Inventory, type: BlockType | 'ANY_PLANK') => {
+const countIngredient = (inventory: Inventory, type: BlockType | 'ANY_PLANK') => {
   const accepted = type === 'ANY_PLANK' ? [BLOCK_TYPE.OAK_PLANKS, BLOCK_TYPE.BIRCH_PLANKS] : [type];
-  return inventory.slots.reduce((total, slot) => total + (slot && accepted.includes(slot.type) ? slot.count : 0), 0);
+  return inventory.slots.reduce((sum, slot) => sum + (slot && accepted.includes(slot.type) ? slot.count : 0), 0);
 };
 
 const canCraft = (inventory: Inventory, recipe: Recipe) =>
-  recipe.ingredients.every((ingredient) => countType(inventory, ingredient.type) >= ingredient.count);
+  recipe.ingredients.every((ingredient) => countIngredient(inventory, ingredient.type) >= ingredient.count);
 
 const removeIngredients = (inventory: Inventory, recipe: Recipe) => {
   const removed: Array<{ type: BlockType; count: number }> = [];
-
   for (const ingredient of recipe.ingredients) {
     const accepted = ingredient.type === 'ANY_PLANK' ? [BLOCK_TYPE.OAK_PLANKS, BLOCK_TYPE.BIRCH_PLANKS] : [ingredient.type];
-    let remaining = ingredient.count;
-
-    for (let i = 0; i < inventory.slots.length && remaining > 0; i++) {
+    let need = ingredient.count;
+    for (let i = 0; i < inventory.slots.length && need > 0; i++) {
       const slot = inventory.slots[i];
       if (!slot || !accepted.includes(slot.type)) continue;
-      const take = Math.min(remaining, slot.count);
+      const take = Math.min(need, slot.count);
       removed.push({ type: slot.type, count: take });
       slot.count -= take;
       if (slot.count <= 0) inventory.slots[i] = null;
-      remaining -= take;
+      need -= take;
     }
   }
-
   return removed;
+};
+
+const isInventoryOpen = () => {
+  const text = document.body.textContent || '';
+  return text.includes('Рюкзак') && (text.includes('Инвентарь и крафт') || text.includes('Верстак (Crafting Table 3x3)'));
 };
 
 export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ onRefreshInventory }) => {
   const [visible, setVisible] = useState(false);
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(0);
-  const [, rerender] = useState(0);
+  const [, refresh] = useState(0);
 
   useEffect(() => {
     const sync = () => {
       const mobile = window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768;
-      const text = document.body.textContent || '';
-      const openInventory = text.includes('Рюкзак') && (text.includes('Инвентарь и крафт') || text.includes('Верстак (Crafting Table 3x3)'));
-      setVisible(mobile && openInventory);
-      if (!openInventory) setOpen(false);
+      const active = mobile && isInventoryOpen();
+      setVisible(active);
+      if (!active) setOpen(false);
     };
-
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(document.body, { childList: true, subtree: true });
@@ -132,24 +119,21 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ onRefreshInv
     };
   }, []);
 
-  const mode = (document.body.textContent || '').includes('Верстак (Crafting Table 3x3)') ? '3x3' : '2x2';
   const inventory = (window as ProjectCraftWindow).__projectcraftInventory;
+  const mode = (document.body.textContent || '').includes('Верстак (Crafting Table 3x3)') ? '3x3' : '2x2';
   const recipes = useMemo(() => RECIPES.filter((recipe) => recipe.table === mode), [mode]);
-  const shownRecipes = recipes.slice(page * 6, page * 6 + 6);
-  const maxPage = Math.max(0, Math.ceil(recipes.length / 6) - 1);
+  const shown = recipes.slice(page * 5, page * 5 + 5);
+  const maxPage = Math.max(0, Math.ceil(recipes.length / 5) - 1);
 
   const craft = (recipe: Recipe) => {
     const current = (window as ProjectCraftWindow).__projectcraftInventory;
     if (!current || !canCraft(current, recipe)) return;
-
     const removed = removeIngredients(current, recipe);
-    const added = current.addItem(recipe.output, recipe.count);
-    if (!added) {
+    if (!current.addItem(recipe.output, recipe.count)) {
       for (const item of removed) current.addItem(item.type, item.count);
       return;
     }
-
-    rerender((value) => value + 1);
+    refresh((value) => value + 1);
     onRefreshInventory();
   };
 
@@ -159,27 +143,27 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ onRefreshInv
     <>
       <button
         onClick={() => setOpen((value) => !value)}
-        aria-label="Открыть книгу рецептов"
+        aria-label="Книга рецептов"
         style={{
           position: 'fixed',
-          right: '8px',
           top: '50%',
+          right: 'calc(50% - 226px)',
           transform: 'translateY(-50%)',
-          width: '48px',
-          height: '48px',
-          borderRadius: '8px',
-          border: '3px solid #1f2937',
-          background: '#4b5563',
-          color: '#fff',
+          width: '40px',
+          height: '54px',
+          background: '#c6c6c6',
+          color: '#373737',
+          borderTop: '3px solid #fff',
+          borderLeft: '3px solid #fff',
+          borderRight: '3px solid #555',
+          borderBottom: '3px solid #555',
           zIndex: 130,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 4px 14px rgba(0,0,0,.5)',
+          fontSize: '22px',
+          lineHeight: 1,
           touchAction: 'manipulation',
         }}
       >
-        <BookOpen size={24} />
+        📖
       </button>
 
       {open && (
@@ -187,27 +171,27 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ onRefreshInv
           style={{
             position: 'fixed',
             top: '50%',
-            right: '8px',
+            right: 'calc(50% - 362px)',
             transform: 'translateY(-50%)',
-            width: 'min(290px, calc(100vw - 70px))',
+            width: 'min(270px, calc(100vw - 18px))',
             maxHeight: '78vh',
             background: '#c6c6c6',
             borderTop: '3px solid #fff',
             borderLeft: '3px solid #fff',
             borderRight: '3px solid #555',
             borderBottom: '3px solid #555',
-            boxShadow: '0 8px 28px rgba(0,0,0,.75)',
+            boxShadow: '0 8px 24px rgba(0,0,0,.7)',
             zIndex: 125,
             fontFamily: 'monospace',
+            color: '#373737',
           }}
         >
-          <div style={{ padding: '9px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #8b8b8b' }}>
-            <b style={{ fontSize: '13px' }}>📖 Книга крафтов</b>
-            <span style={{ fontSize: '8px', color: '#555' }}>1 нажатие</span>
+          <div style={{ padding: '9px 10px', fontWeight: 700, fontSize: '13px', borderBottom: '2px solid #8b8b8b', textShadow: '1px 1px #eee' }}>
+            Книга рецептов
           </div>
 
-          <div style={{ padding: '8px', maxHeight: 'calc(78vh - 82px)', overflowY: 'auto' }}>
-            {shownRecipes.map((recipe) => {
+          <div style={{ padding: '8px', maxHeight: 'calc(78vh - 85px)', overflowY: 'auto' }}>
+            {shown.map((recipe) => {
               const available = inventory ? canCraft(inventory, recipe) : false;
               return (
                 <button
@@ -216,38 +200,43 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ onRefreshInv
                   disabled={!available}
                   style={{
                     width: '100%',
-                    display: 'flex',
+                    minHeight: '54px',
+                    marginBottom: '6px',
+                    padding: '5px',
+                    display: 'grid',
+                    gridTemplateColumns: '42px 1fr 28px',
                     alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '7px',
-                    padding: '7px',
-                    border: `2px solid ${available ? '#4b5563' : '#9ca3af'}`,
-                    background: available ? '#e5e7eb' : '#b8b8b8',
-                    color: available ? '#111827' : '#666',
+                    gap: '7px',
                     textAlign: 'left',
-                    opacity: available ? 1 : 0.6,
+                    background: available ? '#d8d8d8' : '#b5b5b5',
+                    color: available ? '#222' : '#666',
+                    borderTop: `2px solid ${available ? '#fff' : '#d0d0d0'}`,
+                    borderLeft: `2px solid ${available ? '#fff' : '#d0d0d0'}`,
+                    borderRight: '2px solid #555',
+                    borderBottom: '2px solid #555',
+                    opacity: available ? 1 : 0.72,
                     touchAction: 'manipulation',
                   }}
                 >
-                  <span style={{ width: '38px', height: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#8b8b8b', border: '2px solid #555', fontSize: '22px', flexShrink: 0 }}>
-                    {emojiFor(recipe.output)}
+                  <span style={{ width: '38px', height: '38px', background: '#8b8b8b', borderTop: '2px solid #373737', borderLeft: '2px solid #373737', borderRight: '2px solid #fff', borderBottom: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
+                    {recipe.output === BLOCK_TYPE.WOODEN_PICKAXE || recipe.output === BLOCK_TYPE.STONE_PICKAXE || recipe.output === BLOCK_TYPE.IRON_PICKAXE || recipe.output === BLOCK_TYPE.GOLDEN_PICKAXE || recipe.output === BLOCK_TYPE.DIAMOND_PICKAXE ? '⛏️' : recipe.output === BLOCK_TYPE.WOODEN_AXE || recipe.output === BLOCK_TYPE.STONE_AXE || recipe.output === BLOCK_TYPE.IRON_AXE || recipe.output === BLOCK_TYPE.DIAMOND_AXE ? '🪓' : recipe.output === BLOCK_TYPE.WOODEN_SWORD || recipe.output === BLOCK_TYPE.IRON_SWORD || recipe.output === BLOCK_TYPE.GOLDEN_SWORD || recipe.output === BLOCK_TYPE.DIAMOND_SWORD ? '⚔️' : recipe.output === BLOCK_TYPE.FURNACE ? '🔥' : '▪'}
                   </span>
-                  <span style={{ minWidth: 0, flex: 1 }}>
+                  <span>
                     <span style={{ display: 'block', fontSize: '10px', fontWeight: 700 }}>{recipe.name} ×{recipe.count}</span>
-                    <span style={{ display: 'block', fontSize: '8px', marginTop: '3px', color: available ? '#374151' : '#6b7280' }}>
-                      {recipe.ingredients.map((ingredient) => `${ingredient.count} ${ingredient.type === 'ANY_PLANK' ? 'доски' : 'предм.'}`).join(' + ')}
+                    <span style={{ display: 'block', marginTop: '3px', fontSize: '8px' }}>
+                      {recipe.ingredients.map((ingredient) => `${ingredient.count}× ${ingredientName(ingredient.type)}`).join(' + ')}
                     </span>
                   </span>
-                  <Check size={17} style={{ opacity: available ? 1 : 0.12, flexShrink: 0 }} />
+                  <span style={{ fontSize: '16px', textAlign: 'center' }}>{available ? '✓' : '×'}</span>
                 </button>
               );
             })}
           </div>
 
-          <div style={{ padding: '6px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '2px solid #8b8b8b' }}>
-            <button onClick={() => setPage((value) => Math.max(0, value - 1))} disabled={page === 0} style={{ width: '38px', height: '30px' }}><ChevronLeft size={17} /></button>
-            <span style={{ fontSize: '9px' }}>Стр. {page + 1}/{maxPage + 1}</span>
-            <button onClick={() => setPage((value) => Math.min(maxPage, value + 1))} disabled={page === maxPage} style={{ width: '38px', height: '30px' }}><ChevronRight size={17} /></button>
+          <div style={{ padding: '6px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '2px solid #8b8b8b' }}>
+            <button onClick={() => setPage((value) => Math.max(0, value - 1))} disabled={page === 0} style={{ width: '42px', height: '30px', background: '#c6c6c6', borderTop: '2px solid #fff', borderLeft: '2px solid #fff', borderRight: '2px solid #555', borderBottom: '2px solid #555' }}>◀</button>
+            <span style={{ fontSize: '9px' }}>{page + 1} / {maxPage + 1}</span>
+            <button onClick={() => setPage((value) => Math.min(maxPage, value + 1))} disabled={page === maxPage} style={{ width: '42px', height: '30px', background: '#c6c6c6', borderTop: '2px solid #fff', borderLeft: '2px solid #fff', borderRight: '2px solid #555', borderBottom: '2px solid #555' }}>▶</button>
           </div>
         </div>
       )}
