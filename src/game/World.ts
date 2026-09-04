@@ -126,7 +126,6 @@ export class World {
     mesh.renderOrder = 2;
     mesh.receiveShadow = false;
     mesh.castShadow = false;
-    // Instances are spread across the entire chunk, so don't let the base geometry bounds cull them.
     mesh.frustumCulled = false;
 
     for (let i = 0; i < waterPositions.length; i++) {
@@ -228,7 +227,7 @@ export class World {
     const lx = x - cx * WORLD_CONFIG.CHUNK_SIZE_X;
     const lz = z - cz * WORLD_CONFIG.CHUNK_SIZE_Z;
 
-    const changed = chunk.setLocalBlock(lx, ly, lz, type);
+    const changed = chunk.setLocalBlock(lx, y, lz, type);
     if (!changed) return false;
 
     const affected: Chunk[] = [chunk];
