@@ -12,6 +12,7 @@ export class World {
   private noise: SimplexNoise;
   private waterMeshes = new Map<string, THREE.InstancedMesh>();
   private waterGeometry = new THREE.BoxGeometry(1, 1, 1);
+  private waterDummy = new THREE.Object3D();
 
   private lastPlayerChunkX = -9999;
   private lastPlayerChunkZ = -9999;
@@ -146,9 +147,9 @@ export class World {
 
     for (let i = 0; i < waterPositions.length; i++) {
       const p = waterPositions[i];
-      Chunk['dummy'].position.set(p.x + 0.5, p.y + 0.5, p.z + 0.5);
-      Chunk['dummy'].updateMatrix();
-      mesh.setMatrixAt(i, Chunk['dummy'].matrix);
+      this.waterDummy.position.set(p.x + 0.5, p.y + 0.5, p.z + 0.5);
+      this.waterDummy.updateMatrix();
+      mesh.setMatrixAt(i, this.waterDummy.matrix);
       mesh.setColorAt(i, new THREE.Color(
         this.packPair(p.plusX, p.minusX),
         this.packPair(p.plusZ, p.minusZ),
