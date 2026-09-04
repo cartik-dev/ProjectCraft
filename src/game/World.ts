@@ -258,7 +258,6 @@ export class World {
 
   public setBlock(x: number, y: number, z: number, type: BlockType): boolean {
     if (y < 0 || y >= WORLD_CONFIG.CHUNK_HEIGHT) return false;
-    if (type === BLOCK_TYPE.WATER) return false;
 
     const cx = Math.floor(x / WORLD_CONFIG.CHUNK_SIZE_X);
     const cz = Math.floor(z / WORLD_CONFIG.CHUNK_SIZE_Z);
