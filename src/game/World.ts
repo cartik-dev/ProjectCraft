@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { BLOCK_TYPE, type BlockType, WORLD_CONFIG } from './constants';
 import { SimplexNoise } from './noise';
 import { createBlockMaterials, type BlockMaterials } from './textures';
+import { createWaterMaterial } from './WaterMaterial';
 import { Chunk } from './Chunk';
 
 export class World {
@@ -16,9 +17,10 @@ export class World {
   constructor(seed = WORLD_CONFIG.SEED) {
     this.group = new THREE.Group();
     this.materials = createBlockMaterials();
+    // Replace the flat textured water with a lightweight animated shader.
+    this.materials.materialsByBlock[BLOCK_TYPE.WATER] = createWaterMaterial();
     this.noise = new SimplexNoise(seed);
 
-    // Initial load around center (0, 0)
     this.updatePlayerPosition(0, 0, true);
   }
 
@@ -54,9 +56,6 @@ export class World {
     return chunk;
   }
 
-  /**
-   * Update chunks dynamically based on player position
-   */
   public updatePlayerPosition(playerX: number, playerZ: number, force = false): void {
     const pcx = Math.floor(playerX / WORLD_CONFIG.CHUNK_SIZE_X);
     const pcz = Math.floor(playerZ / WORLD_CONFIG.CHUNK_SIZE_Z);
@@ -70,10 +69,8 @@ export class World {
 
     const radius = WORLD_CONFIG.VIEW_DISTANCE_CHUNKS;
     const unloadDist = WORLD_CONFIG.UNLOAD_DISTANCE_CHUNKS;
-
     const chunksToMesh: Chunk[] = [];
 
-    // 1. Generate new chunks within view radius
     for (let dx = -radius; dx <= radius; dx++) {
       for (let dz = -radius; dz <= radius; dz++) {
         const cx = pcx + dx;
@@ -93,12 +90,10 @@ export class World {
       }
     }
 
-    // 2. Build meshes for new/dirty chunks
     for (const chunk of chunksToMesh) {
       chunk.buildMeshes(this.materials, this);
     }
 
-    // 3. Unload distant chunks outside unload radius
     const chunksToRemove: string[] = [];
     this.chunks.forEach((chunk, key) => {
       const dist = Math.max(Math.abs(chunk.cx - pcx), Math.abs(chunk.cz - pcz));
@@ -115,32 +110,23 @@ export class World {
   }
 
   public getBlock(x: number, y: number, z: number): BlockType {
-    if (y < 0 || y >= WORLD_CONFIG.CHUNK_HEIGHT) {
-      return BLOCK_TYPE.AIR;
-    }
+    if (y < 0 || y >= WORLD_CONFIG.CHUNK_HEIGHT) return BLOCK_TYPE.AIR;
 
     const cx = Math.floor(x / WORLD_CONFIG.CHUNK_SIZE_X);
     const cz = Math.floor(z / WORLD_CONFIG.CHUNK_SIZE_Z);
-
     const chunk = this.getChunk(cx, cz);
-    if (!chunk) {
-      return BLOCK_TYPE.AIR;
-    }
+    if (!chunk) return BLOCK_TYPE.AIR;
 
     const lx = x - cx * WORLD_CONFIG.CHUNK_SIZE_X;
     const lz = z - cz * WORLD_CONFIG.CHUNK_SIZE_Z;
-
     return chunk.getLocalBlock(lx, y, lz);
   }
 
   public setBlock(x: number, y: number, z: number, type: BlockType): boolean {
-    if (y < 0 || y >= WORLD_CONFIG.CHUNK_HEIGHT) {
-      return false;
-    }
+    if (y < 0 || y >= WORLD_CONFIG.CHUNK_HEIGHT) return false;
 
     const cx = Math.floor(x / WORLD_CONFIG.CHUNK_SIZE_X);
     const cz = Math.floor(z / WORLD_CONFIG.CHUNK_SIZE_Z);
-
     const chunk = this.getOrCreateChunk(cx, cz);
     const lx = x - cx * WORLD_CONFIG.CHUNK_SIZE_X;
     const lz = z - cz * WORLD_CONFIG.CHUNK_SIZE_Z;
@@ -150,7 +136,6 @@ export class World {
 
     chunk.buildMeshes(this.materials, this);
 
-    // Rebuild neighbor chunks if block is on the edge
     if (lx === 0) this.getChunk(cx - 1, cz)?.buildMeshes(this.materials, this);
     if (lx === WORLD_CONFIG.CHUNK_SIZE_X - 1) this.getChunk(cx + 1, cz)?.buildMeshes(this.materials, this);
     if (lz === 0) this.getChunk(cx, cz - 1)?.buildMeshes(this.materials, this);
@@ -169,7 +154,6 @@ export class World {
   }
 
   public getSpawnPoint(): THREE.Vector3 {
-    // Spiral search around (0, 0) to find a safe, open grass surface away from canyons
     for (let r = 0; r <= 48; r += 4) {
       for (let dx = -r; dx <= r; dx += 4) {
         for (let dz = -r; dz <= r; dz += 4) {
@@ -204,20 +188,13 @@ export class World {
     if (!chunk) return 'Равнины (Plains)';
 
     switch (chunk.primaryBiome) {
-      case 'dense_forest':
-        return 'Густой лес (Dense Forest)';
-      case 'canyon':
-        return 'Каньон / Разлом (Canyon)';
-      case 'forest':
-        return 'Смешанный лес (Forest)';
-      default:
-        return 'Равнины (Plains)';
+      case 'dense_forest': return 'Густой лес (Dense Forest)';
+      case 'canyon': return 'Каньон / Разлом (Canyon)';
+      case 'forest': return 'Смешанный лес (Forest)';
+      default: return 'Равнины (Plains)';
     }
   }
 
-  /**
-   * Fast 3D DDA raycasting across loaded chunks
-   */
   public raycast(
     origin: THREE.Vector3,
     direction: THREE.Vector3,
@@ -247,7 +224,6 @@ export class World {
     let normalX = 0;
     let normalY = 0;
     let normalZ = 0;
-
     let dist = 0;
 
     while (dist <= maxDistance) {
@@ -277,22 +253,20 @@ export class World {
           normalY = 0;
           normalZ = -stepZ;
         }
+      } else if (maxY < maxZ) {
+        dist = maxY;
+        y += stepY;
+        maxY += deltaY;
+        normalX = 0;
+        normalY = -stepY;
+        normalZ = 0;
       } else {
-        if (maxY < maxZ) {
-          dist = maxY;
-          y += stepY;
-          maxY += deltaY;
-          normalX = 0;
-          normalY = -stepY;
-          normalZ = 0;
-        } else {
-          dist = maxZ;
-          z += stepZ;
-          maxZ += deltaZ;
-          normalX = 0;
-          normalY = 0;
-          normalZ = -stepZ;
-        }
+        dist = maxZ;
+        z += stepZ;
+        maxZ += deltaZ;
+        normalX = 0;
+        normalY = 0;
+        normalZ = -stepZ;
       }
     }
 
