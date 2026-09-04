@@ -10,6 +10,8 @@ export class World {
   public group: THREE.Group;
   public materials: BlockMaterials;
   private noise: SimplexNoise;
+  private waterMeshes = new Map<string, THREE.InstancedMesh>();
+  private waterGeometry = new THREE.BoxGeometry(1, 1, 1);
 
   private lastPlayerChunkX = -9999;
   private lastPlayerChunkZ = -9999;
@@ -23,6 +25,12 @@ export class World {
   }
 
   public resetSeed(newSeed: number): void {
+    for (const mesh of this.waterMeshes.values()) {
+      this.group.remove(mesh);
+      mesh.dispose();
+    }
+    this.waterMeshes.clear();
+
     for (const chunk of this.chunks.values()) {
       this.group.remove(chunk.group);
       chunk.dispose();
@@ -52,6 +60,113 @@ export class World {
       this.group.add(chunk.group);
     }
     return chunk;
+  }
+
+  private hideLegacyWaterMesh(chunk: Chunk): void {
+    for (const child of chunk.group.children) {
+      if (child instanceof THREE.InstancedMesh && child.renderOrder === 1) {
+        child.visible = false;
+      }
+    }
+  }
+
+  private packPair(first: boolean, second: boolean): number {
+    return (Number(first) + Number(second) * 2) / 4;
+  }
+
+  /**
+   * Render each water block with only its exposed top and air-facing side faces.
+   * The mask is packed into instanceColor for the water shader.
+   */
+  private rebuildWaterMesh(chunk: Chunk): void {
+    const key = this.getChunkKey(chunk.cx, chunk.cz);
+    const previous = this.waterMeshes.get(key);
+    if (previous) {
+      this.group.remove(previous);
+      previous.dispose();
+      this.waterMeshes.delete(key);
+    }
+
+    this.hideLegacyWaterMesh(chunk);
+
+    const waterPositions: Array<{
+      x: number;
+      y: number;
+      z: number;
+      plusX: boolean;
+      minusX: boolean;
+      plusZ: boolean;
+      minusZ: boolean;
+      top: boolean;
+    }> = [];
+
+    for (let lx = 0; lx < WORLD_CONFIG.CHUNK_SIZE_X; lx++) {
+      for (let ly = 0; ly < WORLD_CONFIG.CHUNK_HEIGHT; ly++) {
+        for (let lz = 0; lz < WORLD_CONFIG.CHUNK_SIZE_Z; lz++) {
+          if (chunk.getLocalBlock(lx, ly, lz) !== BLOCK_TYPE.WATER) continue;
+
+          const wx = chunk.worldStartX + lx;
+          const wz = chunk.worldStartZ + lz;
+          const plusX = this.getBlock(wx + 1, ly, wz) === BLOCK_TYPE.AIR;
+          const minusX = this.getBlock(wx - 1, ly, wz) === BLOCK_TYPE.AIR;
+          const plusZ = this.getBlock(wx, ly, wz + 1) === BLOCK_TYPE.AIR;
+          const minusZ = this.getBlock(wx, ly, wz - 1) === BLOCK_TYPE.AIR;
+          const top = this.getBlock(wx, ly + 1, wz) === BLOCK_TYPE.AIR;
+
+          if (!plusX && !minusX && !plusZ && !minusZ && !top) continue;
+
+          waterPositions.push({
+            x: wx,
+            y: ly,
+            z: wz,
+            plusX,
+            minusX,
+            plusZ,
+            minusZ,
+            top,
+          });
+        }
+      }
+    }
+
+    if (waterPositions.length === 0) return;
+
+    const material = this.materials.materialsByBlock[BLOCK_TYPE.WATER];
+    if (Array.isArray(material)) return;
+
+    const mesh = new THREE.InstancedMesh(
+      this.waterGeometry,
+      material,
+      waterPositions.length
+    );
+    mesh.renderOrder = 2;
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    mesh.frustumCulled = true;
+
+    for (let i = 0; i < waterPositions.length; i++) {
+      const p = waterPositions[i];
+      Chunk['dummy'].position.set(p.x + 0.5, p.y + 0.5, p.z + 0.5);
+      Chunk['dummy'].updateMatrix();
+      mesh.setMatrixAt(i, Chunk['dummy'].matrix);
+      mesh.setColorAt(i, new THREE.Color(
+        this.packPair(p.plusX, p.minusX),
+        this.packPair(p.plusZ, p.minusZ),
+        this.packPair(p.top, false)
+      ));
+    }
+
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+
+    this.waterMeshes.set(key, mesh);
+    this.group.add(mesh);
+  }
+
+  private rebuildLoadedWaterMeshes(): void {
+    for (const chunk of this.chunks.values()) {
+      this.rebuildWaterMesh(chunk);
+    }
   }
 
   public updatePlayerPosition(playerX: number, playerZ: number, force = false): void {
@@ -91,6 +206,12 @@ export class World {
     this.chunks.forEach((chunk, key) => {
       const dist = Math.max(Math.abs(chunk.cx - pcx), Math.abs(chunk.cz - pcz));
       if (dist > unloadDist) {
+        const waterMesh = this.waterMeshes.get(key);
+        if (waterMesh) {
+          this.group.remove(waterMesh);
+          waterMesh.dispose();
+          this.waterMeshes.delete(key);
+        }
         chunk.dispose();
         this.group.remove(chunk.group);
         chunksToRemove.push(key);
@@ -98,6 +219,7 @@ export class World {
     });
 
     for (const key of chunksToRemove) this.chunks.delete(key);
+    this.rebuildLoadedWaterMeshes();
   }
 
   public getBlock(x: number, y: number, z: number): BlockType {
@@ -124,11 +246,38 @@ export class World {
     const changed = chunk.setLocalBlock(lx, y, lz, type);
     if (!changed) return false;
 
+    const affected: Chunk[] = [chunk];
     chunk.buildMeshes(this.materials, this);
-    if (lx === 0) this.getChunk(cx - 1, cz)?.buildMeshes(this.materials, this);
-    if (lx === WORLD_CONFIG.CHUNK_SIZE_X - 1) this.getChunk(cx + 1, cz)?.buildMeshes(this.materials, this);
-    if (lz === 0) this.getChunk(cx, cz - 1)?.buildMeshes(this.materials, this);
-    if (lz === WORLD_CONFIG.CHUNK_SIZE_Z - 1) this.getChunk(cx, cz + 1)?.buildMeshes(this.materials, this);
+    if (lx === 0) {
+      const neighbor = this.getChunk(cx - 1, cz);
+      if (neighbor) {
+        neighbor.buildMeshes(this.materials, this);
+        affected.push(neighbor);
+      }
+    }
+    if (lx === WORLD_CONFIG.CHUNK_SIZE_X - 1) {
+      const neighbor = this.getChunk(cx + 1, cz);
+      if (neighbor) {
+        neighbor.buildMeshes(this.materials, this);
+        affected.push(neighbor);
+      }
+    }
+    if (lz === 0) {
+      const neighbor = this.getChunk(cx, cz - 1);
+      if (neighbor) {
+        neighbor.buildMeshes(this.materials, this);
+        affected.push(neighbor);
+      }
+    }
+    if (lz === WORLD_CONFIG.CHUNK_SIZE_Z - 1) {
+      const neighbor = this.getChunk(cx, cz + 1);
+      if (neighbor) {
+        neighbor.buildMeshes(this.materials, this);
+        affected.push(neighbor);
+      }
+    }
+
+    for (const affectedChunk of affected) this.rebuildWaterMesh(affectedChunk);
     return true;
   }
 
