@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BLOCK_TYPE, type BlockType, WORLD_CONFIG } from './constants';
 import { SimplexNoise } from './noise';
 import { createBlockMaterials, type BlockMaterials } from './textures';
-import { createWaterMaterial } from './WaterMaterial';
+import { createOceanSurfaceMaterial } from './OceanSurfaceMaterial';
 import { Chunk } from './Chunk';
 
 export class World {
@@ -10,6 +10,9 @@ export class World {
   public group: THREE.Group;
   public materials: BlockMaterials;
   private noise: SimplexNoise;
+  private oceanSurface?: THREE.InstancedMesh;
+  private oceanSurfaceGeometry = new THREE.PlaneGeometry(1, 1);
+  private oceanSurfaceMaterial = createOceanSurfaceMaterial();
 
   private lastPlayerChunkX = -9999;
   private lastPlayerChunkZ = -9999;
@@ -17,18 +20,25 @@ export class World {
   constructor(seed = WORLD_CONFIG.SEED) {
     this.group = new THREE.Group();
     this.materials = createBlockMaterials();
-    // Replace the flat textured water with a lightweight animated shader.
-    this.materials.materialsByBlock[BLOCK_TYPE.WATER] = createWaterMaterial();
+
+    // Water remains in the world as a gameplay volume, but it is rendered as
+    // one continuous animated surface instead of breakable-looking cubes.
+    this.materials.materialsByBlock[BLOCK_TYPE.WATER].transparent = true;
+    this.materials.materialsByBlock[BLOCK_TYPE.WATER].opacity = 0;
+    this.materials.materialsByBlock[BLOCK_TYPE.WATER].depthWrite = false;
+
     this.noise = new SimplexNoise(seed);
 
     this.updatePlayerPosition(0, 0, true);
   }
 
   public resetSeed(newSeed: number): void {
+    this.oceanSurface = undefined;
     for (const chunk of this.chunks.values()) {
       this.group.remove(chunk.group);
       chunk.dispose();
     }
+    this.group.remove(this.oceanSurface as THREE.Object3D);
     this.chunks.clear();
     this.noise = new SimplexNoise(newSeed);
     this.lastPlayerChunkX = -9999;
@@ -54,6 +64,69 @@ export class World {
       this.group.add(chunk.group);
     }
     return chunk;
+  }
+
+  private hideBlockWaterMesh(chunk: Chunk): void {
+    for (const child of chunk.group.children) {
+      if (child instanceof THREE.InstancedMesh && child.renderOrder === 1) {
+        child.visible = false;
+      }
+    }
+  }
+
+  /** Rebuild only the visible top layer of loaded water into a seamless plane mesh. */
+  private rebuildOceanSurface(): void {
+    if (this.oceanSurface) {
+      this.group.remove(this.oceanSurface);
+      this.oceanSurface = undefined;
+    }
+
+    const positions: THREE.Vector3[] = [];
+    const seaY = WORLD_CONFIG.SEA_LEVEL;
+
+    for (const chunk of this.chunks.values()) {
+      this.hideBlockWaterMesh(chunk);
+
+      for (let lx = 0; lx < WORLD_CONFIG.CHUNK_SIZE_X; lx++) {
+        for (let lz = 0; lz < WORLD_CONFIG.CHUNK_SIZE_Z; lz++) {
+          if (chunk.getLocalBlock(lx, seaY, lz) !== BLOCK_TYPE.WATER) continue;
+
+          // Only expose the top surface. Side faces remain completely hidden,
+          // so adjacent water cells visually merge into one continuous ocean.
+          const above = chunk.getLocalBlock(lx, seaY + 1, lz);
+          if (above === BLOCK_TYPE.AIR) {
+            positions.push(
+              new THREE.Vector3(
+                chunk.worldStartX + lx + 0.5,
+                seaY + 0.01,
+                chunk.worldStartZ + lz + 0.5
+              )
+            );
+          }
+        }
+      }
+    }
+
+    if (positions.length === 0) return;
+
+    const mesh = new THREE.InstancedMesh(
+      this.oceanSurfaceGeometry,
+      this.oceanSurfaceMaterial,
+      positions.length
+    );
+    mesh.renderOrder = 2;
+    mesh.frustumCulled = false;
+
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < positions.length; i++) {
+      dummy.position.copy(positions[i]);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+
+    mesh.instanceMatrix.needsUpdate = true;
+    this.oceanSurface = mesh;
+    this.group.add(mesh);
   }
 
   public updatePlayerPosition(playerX: number, playerZ: number, force = false): void {
@@ -107,6 +180,8 @@ export class World {
     for (const key of chunksToRemove) {
       this.chunks.delete(key);
     }
+
+    this.rebuildOceanSurface();
   }
 
   public getBlock(x: number, y: number, z: number): BlockType {
@@ -131,6 +206,8 @@ export class World {
     const lx = x - cx * WORLD_CONFIG.CHUNK_SIZE_X;
     const lz = z - cz * WORLD_CONFIG.CHUNK_SIZE_Z;
 
+    if (type === BLOCK_TYPE.WATER) return false;
+
     const changed = chunk.setLocalBlock(lx, y, lz, type);
     if (!changed) return false;
 
@@ -141,6 +218,7 @@ export class World {
     if (lz === 0) this.getChunk(cx, cz - 1)?.buildMeshes(this.materials, this);
     if (lz === WORLD_CONFIG.CHUNK_SIZE_Z - 1) this.getChunk(cx, cz + 1)?.buildMeshes(this.materials, this);
 
+    this.rebuildOceanSurface();
     return true;
   }
 
@@ -228,7 +306,9 @@ export class World {
 
     while (dist <= maxDistance) {
       const currentBlock = this.getBlock(x, y, z);
-      if (currentBlock !== BLOCK_TYPE.AIR) {
+
+      // Water is a fluid volume, not a breakable/selectable block.
+      if (currentBlock !== BLOCK_TYPE.AIR && currentBlock !== BLOCK_TYPE.WATER) {
         return {
           hit: true,
           blockPos: new THREE.Vector3(x, y, z),
