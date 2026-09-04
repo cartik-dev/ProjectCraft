@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BLOCK_TYPE, type BlockType, WORLD_CONFIG } from './constants';
 import { SimplexNoise } from './noise';
 import { createBlockMaterials, type BlockMaterials } from './textures';
-import { createOceanSurfaceMaterial } from './OceanSurfaceMaterial';
+import { createWaterEffectMaterial } from './WaterEffectMaterial';
 import { Chunk } from './Chunk';
 
 export class World {
@@ -10,9 +10,6 @@ export class World {
   public group: THREE.Group;
   public materials: BlockMaterials;
   private noise: SimplexNoise;
-  private oceanSurface?: THREE.InstancedMesh;
-  private oceanSurfaceGeometry = new THREE.PlaneGeometry(1, 1);
-  private oceanSurfaceMaterial = createOceanSurfaceMaterial();
 
   private lastPlayerChunkX = -9999;
   private lastPlayerChunkZ = -9999;
@@ -20,26 +17,12 @@ export class World {
   constructor(seed = WORLD_CONFIG.SEED) {
     this.group = new THREE.Group();
     this.materials = createBlockMaterials();
-
-    // A block material can be a single Material or an array of Materials.
-    // Water uses a single material, but narrow the union before changing it.
-    const waterMaterial = this.materials.materialsByBlock[BLOCK_TYPE.WATER];
-    if (!Array.isArray(waterMaterial)) {
-      waterMaterial.transparent = true;
-      waterMaterial.opacity = 0;
-      waterMaterial.depthWrite = false;
-    }
-
+    this.materials.materialsByBlock[BLOCK_TYPE.WATER] = createWaterEffectMaterial();
     this.noise = new SimplexNoise(seed);
     this.updatePlayerPosition(0, 0, true);
   }
 
   public resetSeed(newSeed: number): void {
-    if (this.oceanSurface) {
-      this.group.remove(this.oceanSurface);
-      this.oceanSurface = undefined;
-    }
-
     for (const chunk of this.chunks.values()) {
       this.group.remove(chunk.group);
       chunk.dispose();
@@ -69,63 +52,6 @@ export class World {
       this.group.add(chunk.group);
     }
     return chunk;
-  }
-
-  private hideBlockWaterMesh(chunk: Chunk): void {
-    for (const child of chunk.group.children) {
-      if (child instanceof THREE.InstancedMesh && child.renderOrder === 1) {
-        child.visible = false;
-      }
-    }
-  }
-
-  private rebuildOceanSurface(): void {
-    if (this.oceanSurface) {
-      this.group.remove(this.oceanSurface);
-      this.oceanSurface = undefined;
-    }
-
-    const positions: THREE.Vector3[] = [];
-    const seaY = WORLD_CONFIG.SEA_LEVEL;
-
-    for (const chunk of this.chunks.values()) {
-      this.hideBlockWaterMesh(chunk);
-
-      for (let lx = 0; lx < WORLD_CONFIG.CHUNK_SIZE_X; lx++) {
-        for (let lz = 0; lz < WORLD_CONFIG.CHUNK_SIZE_Z; lz++) {
-          if (chunk.getLocalBlock(lx, seaY, lz) !== BLOCK_TYPE.WATER) continue;
-          const above = chunk.getLocalBlock(lx, seaY + 1, lz);
-          if (above === BLOCK_TYPE.AIR) {
-            positions.push(new THREE.Vector3(
-              chunk.worldStartX + lx + 0.5,
-              seaY + 0.01,
-              chunk.worldStartZ + lz + 0.5
-            ));
-          }
-        }
-      }
-    }
-
-    if (positions.length === 0) return;
-
-    const mesh = new THREE.InstancedMesh(
-      this.oceanSurfaceGeometry,
-      this.oceanSurfaceMaterial,
-      positions.length
-    );
-    mesh.renderOrder = 2;
-    mesh.frustumCulled = false;
-
-    const dummy = new THREE.Object3D();
-    for (let i = 0; i < positions.length; i++) {
-      dummy.position.copy(positions[i]);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(i, dummy.matrix);
-    }
-
-    mesh.instanceMatrix.needsUpdate = true;
-    this.oceanSurface = mesh;
-    this.group.add(mesh);
   }
 
   public updatePlayerPosition(playerX: number, playerZ: number, force = false): void {
@@ -172,7 +98,6 @@ export class World {
     });
 
     for (const key of chunksToRemove) this.chunks.delete(key);
-    this.rebuildOceanSurface();
   }
 
   public getBlock(x: number, y: number, z: number): BlockType {
@@ -204,7 +129,6 @@ export class World {
     if (lx === WORLD_CONFIG.CHUNK_SIZE_X - 1) this.getChunk(cx + 1, cz)?.buildMeshes(this.materials, this);
     if (lz === 0) this.getChunk(cx, cz - 1)?.buildMeshes(this.materials, this);
     if (lz === WORLD_CONFIG.CHUNK_SIZE_Z - 1) this.getChunk(cx, cz + 1)?.buildMeshes(this.materials, this);
-    this.rebuildOceanSurface();
     return true;
   }
 
