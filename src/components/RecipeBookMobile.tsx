@@ -1,13 +1,26 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BLOCK_TYPE, type BlockType } from '../game/constants';
 import { createBlockMaterials } from '../game/textures';
-import type { Inventory } from '../game/Inventory';
+import { Inventory } from '../game/Inventory';
+
+type ProjectCraftWindow = Window & { __projectcraftInventory?: Inventory };
+
+const inventoryPrototype = Inventory.prototype as Inventory & { __projectCraftBookPatched?: boolean };
+if (!inventoryPrototype.__projectCraftBookPatched) {
+  const originalGetSelectedBlockType = inventoryPrototype.getSelectedBlockType;
+  inventoryPrototype.getSelectedBlockType = function () {
+    (window as ProjectCraftWindow).__projectcraftInventory = this as Inventory;
+    return originalGetSelectedBlockType.call(this);
+  };
+  inventoryPrototype.__projectCraftBookPatched = true;
+}
 
 interface RecipeBookMobileProps {
-  inventory: Inventory;
-  mode: '2x2' | '3x3';
+  inventory?: Inventory;
+  mode?: '2x2' | '3x3';
   blockIcons?: Record<BlockType, string>;
-  onInventoryChange: () => void;
+  onInventoryChange?: () => void;
+  onRefreshInventory?: () => void;
 }
 
 interface Recipe {
@@ -93,7 +106,7 @@ const findInventoryPanel = () => {
   return null;
 };
 
-export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory, mode, blockIcons, onInventoryChange }) => {
+export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory: inventoryProp, mode: modeProp, blockIcons, onInventoryChange, onRefreshInventory }) => {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(0);
   const [side, setSide] = useState<'left' | 'right'>('left');
@@ -102,6 +115,8 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory, m
 
   const isMobile = typeof window !== 'undefined' && (window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768);
   const generatedIcons = useMemo(() => blockIcons ?? (isMobile ? createBlockMaterials().blockIcons : undefined), [blockIcons, isMobile]);
+  const inventory = inventoryProp ?? (window as ProjectCraftWindow).__projectcraftInventory;
+  const mode = modeProp ?? ((document.body.textContent || '').includes('Верстак (Crafting Table 3x3)') ? '3x3' : '2x2');
   const recipes = useMemo(() => RECIPES.filter((recipe) => recipe.table === mode), [mode]);
   const shown = recipes.slice(page * 5, page * 5 + 5);
   const maxPage = Math.max(0, Math.ceil(recipes.length / 5) - 1);
@@ -110,7 +125,6 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory, m
 
   useEffect(() => {
     if (!isMobile || !open) return;
-
     const updatePosition = () => {
       const panel = findInventoryPanel();
       if (!panel) return;
@@ -119,11 +133,9 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory, m
       const gap = 8;
       const canOpenRight = rect.right + gap + bookWidth <= window.innerWidth;
       const canOpenLeft = rect.left - gap - bookWidth >= 0;
-
       setSide(canOpenRight || !canOpenLeft ? 'right' : 'left');
       setAnchor({ left: rect.left, right: rect.right, top: rect.top, height: rect.height });
     };
-
     updatePosition();
     window.addEventListener('resize', updatePosition);
     window.addEventListener('scroll', updatePosition, true);
@@ -133,45 +145,24 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory, m
     };
   }, [isMobile, open, mode]);
 
-  useEffect(() => {
-    if (!isMobile) setOpen(false);
-  }, [isMobile]);
-
   const craft = (recipe: Recipe) => {
-    if (!canCraft(inventory, recipe)) return;
+    if (!inventory || !canCraft(inventory, recipe)) return;
     const removed = removeIngredients(inventory, recipe);
     if (!inventory.addItem(recipe.output, recipe.count)) {
       for (const item of removed) inventory.addItem(item.type, item.count);
       return;
     }
     refresh((value) => value + 1);
-    onInventoryChange();
+    onInventoryChange?.();
+    onRefreshInventory?.();
   };
 
   if (!isMobile) return null;
 
-  const panelStyle: React.CSSProperties = {
-    position: 'fixed',
-    top: `${anchor.top + anchor.height / 2}px`,
-    transform: 'translateY(-50%)',
-    ...(side === 'right'
-      ? { left: `${Math.min(window.innerWidth - 270 - 9, anchor.right + 8)}px` }
-      : { left: `${Math.max(9, anchor.left - Math.min(270, window.innerWidth - 18) - 8)}px` }),
-    width: 'min(270px, calc(100vw - 18px))',
-    maxHeight: '78vh',
-    overflow: 'hidden',
-    background: '#c6c6c6',
-    borderTop: '3px solid #fff',
-    borderLeft: '3px solid #fff',
-    borderRight: '3px solid #555',
-    borderBottom: '3px solid #555',
-    boxShadow: '0 10px 28px rgba(0,0,0,.72)',
-    fontFamily: 'monospace',
-    color: '#373737',
-    pointerEvents: 'auto',
-    zIndex: 130,
-  };
-
+  const bookWidth = Math.min(270, window.innerWidth - 18);
+  const panelLeft = side === 'right'
+    ? Math.min(window.innerWidth - bookWidth - 9, anchor.right + 8)
+    : Math.max(9, anchor.left - bookWidth - 8);
   const buttonLeft = side === 'right'
     ? Math.min(window.innerWidth - 50, anchor.right + 8)
     : Math.max(8, anchor.right - 50);
@@ -202,61 +193,39 @@ export const RecipeBookMobile: React.FC<RecipeBookMobileProps> = ({ inventory, m
           touchAction: 'manipulation',
           zIndex: 131,
         }}
-      >
-        📖
-      </button>
+      >📖</button>
 
       {open && (
-        <div style={panelStyle}>
-          <div style={{ padding: '9px 10px', fontWeight: 700, fontSize: '13px', borderBottom: '2px solid #8b8b8b', textShadow: '1px 1px #eee' }}>
-            Книга рецептов
-          </div>
-
+        <div style={{
+          position: 'fixed', left: `${panelLeft}px`, top: `${anchor.top + anchor.height / 2}px`, transform: 'translateY(-50%)',
+          width: `${bookWidth}px`, maxHeight: '78vh', overflow: 'hidden', background: '#c6c6c6',
+          borderTop: '3px solid #fff', borderLeft: '3px solid #fff', borderRight: '3px solid #555', borderBottom: '3px solid #555',
+          boxShadow: '0 10px 28px rgba(0,0,0,.72)', fontFamily: 'monospace', color: '#373737', pointerEvents: 'auto', zIndex: 130,
+        }}>
+          <div style={{ padding: '9px 10px', fontWeight: 700, fontSize: '13px', borderBottom: '2px solid #8b8b8b', textShadow: '1px 1px #eee' }}>Книга рецептов</div>
           <div style={{ padding: '8px', maxHeight: 'calc(78vh - 84px)', overflowY: 'auto' }}>
             {shown.map((recipe) => {
-              const available = canCraft(inventory, recipe);
+              const available = !!inventory && canCraft(inventory, recipe);
               const icon = generatedIcons?.[recipe.output];
-
               return (
-                <button
-                  key={recipe.id}
-                  onClick={() => craft(recipe)}
-                  disabled={!available}
-                  style={{
-                    width: '100%',
-                    minHeight: '54px',
-                    marginBottom: '6px',
-                    padding: '5px',
-                    display: 'grid',
-                    gridTemplateColumns: '42px 1fr 26px',
-                    alignItems: 'center',
-                    gap: '7px',
-                    textAlign: 'left',
-                    background: available ? '#d8d8d8' : '#b5b5b5',
-                    color: available ? '#222' : '#666',
-                    borderTop: `2px solid ${available ? '#fff' : '#d0d0d0'}`,
-                    borderLeft: `2px solid ${available ? '#fff' : '#d0d0d0'}`,
-                    borderRight: '2px solid #555',
-                    borderBottom: '2px solid #555',
-                    opacity: available ? 1 : 0.72,
-                    touchAction: 'manipulation',
-                  }}
-                >
+                <button key={recipe.id} onClick={() => craft(recipe)} disabled={!available} style={{
+                  width: '100%', minHeight: '54px', marginBottom: '6px', padding: '5px', display: 'grid', gridTemplateColumns: '42px 1fr 26px',
+                  alignItems: 'center', gap: '7px', textAlign: 'left', background: available ? '#d8d8d8' : '#b5b5b5', color: available ? '#222' : '#666',
+                  borderTop: `2px solid ${available ? '#fff' : '#d0d0d0'}`, borderLeft: `2px solid ${available ? '#fff' : '#d0d0d0'}`,
+                  borderRight: '2px solid #555', borderBottom: '2px solid #555', opacity: available ? 1 : 0.72, touchAction: 'manipulation',
+                }}>
                   <span style={{ width: '38px', height: '38px', background: '#8b8b8b', borderTop: '2px solid #373737', borderLeft: '2px solid #373737', borderRight: '2px solid #fff', borderBottom: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    {icon ? <img src={icon} alt={recipe.name} style={{ width: '30px', height: '30px', imageRendering: 'pixelated', pointerEvents: 'none' }} /> : null}
+                    {icon && <img src={icon} alt={recipe.name} style={{ width: '30px', height: '30px', imageRendering: 'pixelated', pointerEvents: 'none' }} />}
                   </span>
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: 'block', fontSize: '10px', fontWeight: 700 }}>{recipe.name} ×{recipe.count}</span>
-                    <span style={{ display: 'block', marginTop: '3px', fontSize: '8px' }}>
-                      {recipe.ingredients.map((ingredient) => `${ingredient.count}× ${ingredientName(ingredient.type)}`).join(' + ')}
-                    </span>
+                    <span style={{ display: 'block', marginTop: '3px', fontSize: '8px' }}>{recipe.ingredients.map((ingredient) => `${ingredient.count}× ${ingredientName(ingredient.type)}`).join(' + ')}</span>
                   </span>
                   <span style={{ fontSize: '16px', textAlign: 'center' }}>{available ? '✓' : '×'}</span>
                 </button>
               );
             })}
           </div>
-
           <div style={{ padding: '6px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '2px solid #8b8b8b' }}>
             <button onClick={() => setPage((value) => Math.max(0, value - 1))} disabled={page === 0} style={{ width: '42px', height: '30px', background: '#c6c6c6', borderTop: '2px solid #fff', borderLeft: '2px solid #fff', borderRight: '2px solid #555', borderBottom: '2px solid #555' }}>◀</button>
             <span style={{ fontSize: '9px' }}>{page + 1} / {maxPage + 1}</span>
